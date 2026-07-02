@@ -48,7 +48,7 @@ A production-ready **Retrieval-Augmented Generation (RAG)** backend built with *
 
 ```bash
 git clone <your-repo-url>
-cd Azure-RAG-Application/backend
+cd NexaVerse/backend
 
 # Create virtual environment
 python -m venv venv
@@ -273,7 +273,7 @@ Users can query their own usage at `/usage/me`. Admins can see all-user analytic
 ## Project Structure
 
 ```
-Azure-RAG-Application/
+NexaVerse/
 ├── backend/
 │   ├── main.py                    # App entry point
 │   ├── config.py                  # Settings from env vars
