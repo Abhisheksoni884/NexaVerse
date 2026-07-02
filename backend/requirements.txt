@@ -1,0 +1,32 @@
+# FastAPI Core
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# Azure SDKs
+azure-storage-blob==12.24.0
+azure-ai-documentintelligence==1.0.0
+azure-search-documents==11.6.0
+azure-cosmos==4.9.0
+azure-ai-contentsafety==1.0.0
+azure-identity==1.20.0
+
+# OpenAI (Azure OpenAI uses the same client)
+openai==1.59.7
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Pydantic / Settings
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Utilities
+python-dotenv==1.0.1
+httpx==0.28.1
+aiofiles==24.1.0
+tiktoken==0.8.0
+
+# Async support for Azure SDKs
+aiohttp==3.11.11
