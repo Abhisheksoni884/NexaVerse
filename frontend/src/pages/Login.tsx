@@ -91,7 +91,7 @@ export function Login() {
           </div>
 
           <h1 className="text-2xl font-bold text-brand-dark mb-1">Welcome back</h1>
-          <p className="text-sm text-slate-500 mb-8">Sign in to your account to continue</p>
+          <p className="text-sm text-slate-700 mb-8">Sign in to your account to continue</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
@@ -102,7 +102,7 @@ export function Login() {
 
             {/* Username */}
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 uppercase tracking-wide">
                 Username
               </label>
               <div className="relative">
@@ -121,7 +121,7 @@ export function Login() {
 
             {/* Password */}
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 uppercase tracking-wide">
                 Password
               </label>
               <div className="relative">
@@ -147,7 +147,7 @@ export function Login() {
 
             {/* Role selector */}
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 uppercase tracking-wide">
                 Role
               </label>
               <div className="grid grid-cols-3 gap-2">
@@ -160,7 +160,7 @@ export function Login() {
                       'py-2 rounded-xl text-xs font-semibold capitalize transition-all border',
                       role === r
                         ? 'bg-brand-teal text-white border-brand-teal shadow-sm'
-                        : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-brand-teal hover:text-brand-teal'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-brand-teal hover:text-brand-teal'
                     )}
                   >
                     {r}
@@ -182,7 +182,7 @@ export function Login() {
 
           {/* Demo credentials */}
           <div className="mt-8 p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Demo Credentials</p>
+            <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-3">Demo Credentials</p>
             <div className="space-y-2">
               {DEMO_CREDS.map(c => (
                 <button
@@ -191,8 +191,8 @@ export function Login() {
                   onClick={() => { setUsername(c.user); setPassword(c.pass); setRole(c.role); }}
                   className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-all group"
                 >
-                  <span className="text-xs font-medium text-slate-600 capitalize">{c.role}</span>
-                  <span className="text-xs text-slate-400 font-mono group-hover:text-brand-blue transition-colors">
+                  <span className="text-xs font-medium text-slate-800 capitalize">{c.role}</span>
+                  <span className="text-xs text-slate-600 font-mono group-hover:text-brand-blue transition-colors">
                     {c.user} / {c.pass}
                   </span>
                 </button>
