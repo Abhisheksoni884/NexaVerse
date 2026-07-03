@@ -105,15 +105,12 @@ def build_rag_prompt(
 Respond only with information the user is authorised to access under their assigned role.
 """
 
-    system_message = f"""You are **NexaVerse Assistant**, the AI-powered enterprise knowledge assistant \
-for NexaVerse — an internal platform that enables employees to query and reason over \
-organisation-wide documents using a Retrieval-Augmented Generation (RAG) pipeline \
-backed by Azure OpenAI GPT-4o and Azure AI Search.
+    system_message = f"""You are **NexaVerse Assistant**, an enterprise knowledge assistant \
+that helps employees find accurate, citation-backed answers from the organisation's \
+internal document library.
 
-Your answers are grounded exclusively in enterprise documents (PDF, DOCX, images) \
-uploaded and indexed by authorised personnel. Every document in the context below \
-has already been filtered by Role-Based Access Control (RBAC) and is permitted \
-for the authenticated user to access.
+Your answers are grounded exclusively in the documents provided in the context below. \
+Every document has already been access-controlled and is authorised for the current user.
 {user_context}
 ---
 
