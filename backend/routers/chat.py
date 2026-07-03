@@ -121,7 +121,12 @@ async def _rag_stream_generator(
     # ── Step 4: Build grounded RAG prompt ─────────────────────────────────────
     session = _get_or_create_session(session_id)
     history_messages = _history_to_messages(session.messages)
-    rag_messages = build_rag_prompt(query, chunks)
+    rag_messages = build_rag_prompt(
+        query,
+        chunks,
+        user_name=current_user.username,
+        user_role=current_user.role,
+    )
 
     # ── Step 5: Stream the completion ─────────────────────────────────────────
     full_response = ""
