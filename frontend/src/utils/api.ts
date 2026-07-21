@@ -1,27 +1,21 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 
-// API base URL - all API routes are prefixed with /api
 const API_BASE_URL = '/api';
 
-// Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  headers: { 'Content-Type': 'application/json' },
 });
 
-// Request interceptor to add auth token
+// Attach JWT token to every request
 api.interceptors.request.use(
   (config) => {
     const userStr = localStorage.getItem('user');
     if (userStr) {
       try {
         const user = JSON.parse(userStr);
-        if (user.token) {
-          config.headers.Authorization = `Bearer ${user.token}`;
-        }
+        if (user.token) config.headers.Authorization = `Bearer ${user.token}`;
       } catch (e) {
         console.error('Failed to parse user from localStorage', e);
       }
@@ -31,12 +25,11 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor to handle auth errors
+// Auto-redirect to login on 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid - clear storage and redirect to login
       localStorage.removeItem('user');
       window.location.href = '/login';
     }
@@ -44,9 +37,7 @@ api.interceptors.response.use(
   }
 );
 
-// ============================================================================
-// Auth API
-// ============================================================================
+// ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface LoginRequest {
   username: string;
@@ -70,48 +61,52 @@ export const authAPI = {
     const response = await api.post('/auth/login', credentials);
     return response.data;
   },
-
   getProfile: async (): Promise<UserProfile> => {
     const response = await api.get('/auth/me');
     return response.data;
   },
 };
 
-// ============================================================================
-// Documents API
-// ============================================================================
+// ─── Documents ────────────────────────────────────────────────────────────────
 
+/** Shape returned by GET /documents/ (DocumentListItem from backend) */
 export interface Document {
   id: string;
-  name: string;
+  filename: string;           // backend field name
   status: 'uploading' | 'extracting' | 'chunking' | 'indexing' | 'ready' | 'failed';
   category: string;
   uploader: string;
-  upload_date: string;
-  page_count?: number;
-  size?: string;
-  error?: string;
+  page_count: number;
+  chunk_count: number;
+  file_size_bytes: number;
+  created_at: string;         // ISO datetime string
 }
 
+/** Shape returned by GET /documents/{id}/status */
 export interface DocumentStatus {
-  id: string;
-  name: string;
+  document_id: string;
   status: string;
-  stage?: string;
-  progress?: number;
-  error?: string;
+  page_count: number;
+  chunk_count: number;
+  error_message: string | null;
+  updated_at: string;
+}
+
+/** Shape returned by POST /documents/upload */
+export interface DocumentUploadResponse {
+  document_id: string;
+  filename: string;
+  status: string;
+  message: string;
 }
 
 export const documentsAPI = {
-  upload: async (file: File, category: string): Promise<Document> => {
+  upload: async (file: File, category: string): Promise<DocumentUploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('category', category);
-
     const response = await api.post('/documents/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
     return response.data;
   },
@@ -130,15 +125,12 @@ export const documentsAPI = {
     await api.delete(`/documents/${documentId}`);
   },
 
-  updateCategory: async (documentId: string, category: string): Promise<Document> => {
-    const response = await api.patch(`/documents/${documentId}/category`, { category });
-    return response.data;
+  updateCategory: async (documentId: string, category: string): Promise<void> => {
+    await api.patch(`/documents/${documentId}/category`, { category });
   },
 };
 
-// ============================================================================
-// Chat API
-// ============================================================================
+// ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export interface Citation {
   id?: string;
@@ -149,32 +141,16 @@ export interface Citation {
   score?: number;
 }
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  citations?: Citation[];
-  timestamp?: string;
-  isStreaming?: boolean;
-}
-
 export interface ChatRequest {
   message: string;
   session_id?: string;
   allowed_categories?: string[];
 }
 
-export interface ChatHistoryMessage {
-  role: string;
-  content: string;
-  timestamp: string;
-  citations?: Citation[];
-}
-
 export const chatAPI = {
   /**
-   * Stream chat responses using Server-Sent Events
-   * Returns an EventSource that emits different event types
+   * Opens an EventSource for SSE streaming.
+   * The backend expects: GET /chat/stream?message=...&session_id=...&token=...
    */
   streamChat: (
     request: ChatRequest,
@@ -185,24 +161,22 @@ export const chatAPI = {
     onReplace?: (content: string) => void
   ): EventSource => {
     const userStr = localStorage.getItem('user');
-    let token = '';
+    let jwtToken = '';
     if (userStr) {
       try {
-        const user = JSON.parse(userStr);
-        token = user.token || '';
+        jwtToken = JSON.parse(userStr).token || '';
       } catch (e) {
         console.error('Failed to parse user token', e);
       }
     }
 
-    // Build query params
     const params = new URLSearchParams();
     params.append('message', request.message);
     params.append('session_id', request.session_id || `session-${Date.now()}`);
     if (request.allowed_categories) {
       request.allowed_categories.forEach(cat => params.append('allowed_categories', cat));
     }
-    if (token) params.append('token', token);
+    if (jwtToken) params.append('token', jwtToken);
 
     const eventSource = new EventSource(`/api/chat/stream?${params.toString()}`);
 
@@ -211,23 +185,13 @@ export const chatAPI = {
         eventSource.close();
         return;
       }
-
       try {
         const data = JSON.parse(e.data);
-        
-        if (data.type === 'citations') {
-          onCitation(data.citations || []);
-        } else if (data.type === 'token') {
-          onToken(data.content || '');
-        } else if (data.type === 'done') {
-          onDone(data.total_tokens || 0);
-          eventSource.close();
-        } else if (data.type === 'error') {
-          onError(data.content || 'An error occurred');
-          eventSource.close();
-        } else if (data.type === 'replace' && onReplace) {
-          onReplace(data.content || '');
-        }
+        if (data.type === 'citations') onCitation(data.citations || []);
+        else if (data.type === 'token') onToken(data.content || '');
+        else if (data.type === 'done') { onDone(data.total_tokens || 0); eventSource.close(); }
+        else if (data.type === 'error') { onError(data.content || 'An error occurred'); eventSource.close(); }
+        else if (data.type === 'replace' && onReplace) onReplace(data.content || '');
       } catch (err) {
         console.error('Failed to parse SSE message', err);
       }
@@ -241,7 +205,7 @@ export const chatAPI = {
     return eventSource;
   },
 
-  getHistory: async (sessionId: string): Promise<ChatHistoryMessage[]> => {
+  getHistory: async (sessionId: string) => {
     const response = await api.get(`/chat/history/${sessionId}`);
     return response.data;
   },
@@ -251,10 +215,9 @@ export const chatAPI = {
   },
 };
 
-// ============================================================================
-// Admin API
-// ============================================================================
+// ─── Admin ────────────────────────────────────────────────────────────────────
 
+/** Single audit log entry as returned by backend */
 export interface AuditLog {
   id: string;
   timestamp: string;
@@ -265,37 +228,57 @@ export interface AuditLog {
   resource_id?: string;
   ip_address?: string;
   session_id?: string;
-  details?: Record<string, any>;
-  token_usage?: number;
+  details?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
   success: boolean;
 }
 
-export interface UsageStats {
+/** Backend response shape for GET /admin/audit */
+export interface AuditLogsResponse {
+  items: AuditLog[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** Single user usage summary as returned by GET /admin/usage */
+export interface UserUsageSummary {
   username: string;
-  role: string;
+  role?: string;
   total_tokens: number;
-  total_queries: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_queries?: number;
   estimated_cost_usd: number;
   last_activity?: string;
+}
+
+/** Backend response shape for GET /admin/usage */
+export interface AdminUsageResponse {
+  users: UserUsageSummary[];
+  total_users: number;
 }
 
 export const adminAPI = {
   getAuditLogs: async (
     username?: string,
     action?: string,
+    role?: string,
     startDate?: string,
     endDate?: string,
-    limit: number = 100,
-    offset: number = 0
-  ): Promise<{ logs: AuditLog[]; total: number }> => {
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<AuditLogsResponse> => {
     const params = new URLSearchParams();
     if (username) params.append('username', username);
     if (action) params.append('action', action);
+    if (role) params.append('role', role);
     if (startDate) params.append('start_date', startDate);
     if (endDate) params.append('end_date', endDate);
-    params.append('limit', limit.toString());
-    params.append('offset', offset.toString());
-
+    params.append('page', page.toString());
+    params.append('page_size', pageSize.toString());
     const response = await api.get(`/admin/audit?${params.toString()}`);
     return response.data;
   },
@@ -307,7 +290,7 @@ export const adminAPI = {
     return response.data;
   },
 
-  getUsageStats: async (): Promise<UsageStats[]> => {
+  getUsageStats: async (): Promise<AdminUsageResponse> => {
     const response = await api.get('/admin/usage');
     return response.data;
   },
@@ -318,32 +301,51 @@ export const adminAPI = {
   },
 };
 
-// ============================================================================
-// Usage API
-// ============================================================================
+// ─── Usage ────────────────────────────────────────────────────────────────────
 
-export interface PersonalUsage {
-  period: string;
+/** Single period usage summary as returned inside GET /usage/me */
+export interface PeriodUsage {
   total_tokens: number;
   total_queries: number;
-  estimated_cost_usd: number;
-  breakdown_by_date?: Record<string, number>;
+  prompt_tokens?: number;
+  completion_tokens?: number;
 }
 
+/** Backend response shape for GET /usage/me */
+export interface MyUsageResponse {
+  username: string;
+  role: string;
+  periods: {
+    daily: PeriodUsage;
+    weekly: PeriodUsage;
+    monthly: PeriodUsage;
+    all_time: PeriodUsage;
+  };
+}
+
+/** Single recent query as returned inside GET /usage/me/recent-queries */
 export interface RecentQuery {
   timestamp: string;
-  message: string;
-  tokens_used: number;
-  session_id: string;
+  action: string;
+  details?: string;
+  total_tokens?: number;
+  session_id?: string;
+  success: boolean;
+}
+
+/** Backend response shape for GET /usage/me/recent-queries */
+export interface RecentQueriesResponse {
+  username: string;
+  queries: RecentQuery[];
 }
 
 export const usageAPI = {
-  getPersonalUsage: async (period: 'daily' | 'weekly' | 'monthly' | 'all-time' = 'all-time'): Promise<PersonalUsage> => {
-    const response = await api.get(`/usage/me?period=${period}`);
+  getPersonalUsage: async (): Promise<MyUsageResponse> => {
+    const response = await api.get('/usage/me');
     return response.data;
   },
 
-  getRecentQueries: async (limit: number = 10): Promise<RecentQuery[]> => {
+  getRecentQueries: async (limit: number = 10): Promise<RecentQueriesResponse> => {
     const response = await api.get(`/usage/me/recent-queries?limit=${limit}`);
     return response.data;
   },

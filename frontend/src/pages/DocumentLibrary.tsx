@@ -6,13 +6,14 @@ import { documentsAPI, type Document as ApiDocument } from '../utils/api';
 
 interface Document {
   id: string;
-  name: string;
+  name: string;          // mapped from backend `filename`
   status: 'uploading' | 'extracting' | 'chunking' | 'indexing' | 'ready' | 'failed';
   pageCount?: number;
-  uploadDate: string;
+  chunkCount?: number;
+  uploadDate: string;    // formatted from backend `created_at`
   category: string;
   uploader: string;
-  size?: string;
+  sizeDisplay?: string;  // formatted from backend `file_size_bytes`
   error?: string;
 }
 
@@ -98,7 +99,7 @@ export function DocumentLibrary() {
         const status = await documentsAPI.getStatus(doc.id);
         setDocuments(prev => prev.map(d => 
           d.id === doc.id 
-            ? { ...d, status: status.status as any, error: status.error }
+            ? { ...d, status: status.status as any, error: status.error_message || undefined }
             : d
         ));
       } catch (err) {
@@ -116,20 +117,27 @@ export function DocumentLibrary() {
     }
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes) return 'Unknown size';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const mapApiDocument = (doc: ApiDocument): Document => ({
     id: doc.id,
-    name: doc.name,
+    name: doc.filename,           // backend returns `filename`
     status: doc.status,
     pageCount: doc.page_count,
-    uploadDate: new Date(doc.upload_date).toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
+    chunkCount: doc.chunk_count,
+    uploadDate: new Date(doc.created_at).toLocaleDateString('en-US', {  // backend returns `created_at`
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
     }),
     category: doc.category,
     uploader: doc.uploader,
-    size: doc.size,
-    error: doc.error,
+    sizeDisplay: formatFileSize(doc.file_size_bytes),  // backend returns `file_size_bytes`
   });
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,9 +146,9 @@ export function DocumentLibrary() {
 
     try {
       setUploadProgress(`Uploading ${file.name}...`);
-      const uploadedDoc = await documentsAPI.upload(file, uploadCategory);
-      setDocuments(prev => [mapApiDocument(uploadedDoc), ...prev]);
+      await documentsAPI.upload(file, uploadCategory);
       setUploadProgress('Upload successful! Processing document...');
+      await loadDocuments();
       
       // Start polling if not already
       if (!pollIntervalRef.current) {
@@ -333,8 +341,9 @@ export function DocumentLibrary() {
                             {doc.name}
                           </p>
                           <p className="text-xs text-slate-400">
-                            {doc.size ? `${doc.size}` : 'Size unknown'}
+                            {doc.sizeDisplay ?? 'Unknown size'}
                             {doc.pageCount ? ` · ${doc.pageCount} pages` : ''}
+                            {doc.chunkCount ? ` · ${doc.chunkCount} chunks` : ''}
                           </p>
                         </div>
                       </div>

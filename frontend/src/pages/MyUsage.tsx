@@ -1,34 +1,89 @@
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { BarChart3, TrendingUp, Cpu, Calendar, Download } from 'lucide-react';
+import { TrendingUp, Cpu, Calendar, RefreshCw, AlertCircle, MessageSquare } from 'lucide-react';
+import { usageAPI, type MyUsageResponse, type RecentQuery } from '../utils/api';
 
-const weekData = [
-  { day: 'Mon', tokens: 6200,  queries: 18 },
-  { day: 'Tue', tokens: 8400,  queries: 24 },
-  { day: 'Wed', tokens: 5100,  queries: 15 },
-  { day: 'Thu', tokens: 9200,  queries: 27 },
-  { day: 'Fri', tokens: 7600,  queries: 22 },
-  { day: 'Sat', tokens: 4000,  queries: 12 },
-  { day: 'Sun', tokens: 2800,  queries: 6  },
-];
+const formatTokens = (n: number) => {
+  if (!n) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString();
+};
 
-const recentQueries = [
-  { query: 'What is our Q3 revenue forecast?',    tokens: 412,  date: 'Today, 2:14 PM',  status: 'Success' },
-  { query: 'Summarise the HR policy update',       tokens: 318,  date: 'Today, 11:03 AM', status: 'Success' },
-  { query: 'Find contract renewal dates for 2025', tokens: 527,  date: 'Yesterday',       status: 'Success' },
-  { query: 'List top 5 clients by revenue',        tokens: 289,  date: 'Yesterday',       status: 'Success' },
-  { query: 'Explain the new expense policy',       tokens: 0,    date: '2 days ago',      status: 'Error'   },
-];
+const formatTimestamp = (ts: string) => {
+  try {
+    return new Date(ts).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return ts;
+  }
+};
 
 export function MyUsage() {
   const { user } = useAuth();
+  const [usage, setUsage]         = useState<MyUsageResponse | null>(null);
+  const [queries, setQueries]     = useState<RecentQuery[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState('');
+  const [activePeriod, setActivePeriod] = useState<'daily' | 'weekly' | 'monthly' | 'all_time'>('all_time');
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [usageRes, queriesRes] = await Promise.all([
+        usageAPI.getPersonalUsage(),
+        usageAPI.getRecentQueries(10),
+      ]);
+      setUsage(usageRes);
+      setQueries(queriesRes.queries ?? []);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to load usage data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const currentPeriod = usage?.periods?.[activePeriod];
+
+  const PERIOD_LABELS: Record<string, string> = {
+    daily:    'Today',
+    weekly:   'This Week',
+    monthly:  'This Month',
+    all_time: 'All Time',
+  };
 
   const statCards = [
-    { label: 'Total Tokens',    value: '45,231', sub: 'This month',     bg: 'bg-brand-blue',  text: 'text-white', icon: Cpu },
-    { label: 'Queries Made',    value: '124',    sub: 'This month',     bg: 'bg-brand-teal',  text: 'text-white', icon: TrendingUp },
-    { label: 'Avg Daily Usage', value: '1,508',  sub: 'tokens / day',   bg: 'bg-brand-lime',  text: 'text-brand-dark', icon: Calendar },
+    {
+      label: 'Total Tokens',
+      value: formatTokens(currentPeriod?.total_tokens || 0),
+      sub: PERIOD_LABELS[activePeriod],
+      bg: 'bg-brand-blue',
+      text: 'text-white',
+      icon: Cpu,
+    },
+    {
+      label: 'Queries Made',
+      value: (currentPeriod?.total_queries || 0).toLocaleString(),
+      sub: PERIOD_LABELS[activePeriod],
+      bg: 'bg-brand-teal',
+      text: 'text-white',
+      icon: TrendingUp,
+    },
+    {
+      label: 'Avg per Query',
+      value: currentPeriod?.total_queries
+        ? Math.round((currentPeriod.total_tokens || 0) / currentPeriod.total_queries).toLocaleString()
+        : '0',
+      sub: 'tokens / query',
+      bg: 'bg-brand-lime',
+      text: 'text-brand-dark',
+      icon: Calendar,
+    },
   ];
-
-  const maxTokens = Math.max(...weekData.map(d => d.tokens));
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -37,13 +92,43 @@ export function MyUsage() {
         <div>
           <h1 className="text-xl font-bold text-brand-dark">My Usage</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Token consumption for <span className="font-semibold text-brand-blue">{user?.username}</span>
+            Token consumption for{' '}
+            <span className="font-semibold text-brand-blue">{user?.username}</span>
           </p>
         </div>
-        <button className="btn-primary flex items-center gap-2">
-          <Download className="w-4 h-4" />
-          Export
+        <button
+          onClick={fetchData}
+          disabled={loading}
+          className="btn-secondary flex items-center gap-2"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
         </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Period selector */}
+      <div className="flex items-center gap-2">
+        {(['daily', 'weekly', 'monthly', 'all_time'] as const).map(p => (
+          <button
+            key={p}
+            onClick={() => setActivePeriod(p)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
+              activePeriod === p
+                ? 'bg-brand-dark text-white border-brand-dark'
+                : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+            }`}
+          >
+            {PERIOD_LABELS[p]}
+          </button>
+        ))}
       </div>
 
       {/* Stat cards */}
@@ -51,103 +136,102 @@ export function MyUsage() {
         {statCards.map(s => (
           <div key={s.label} className={`rounded-2xl p-5 flex flex-col gap-1 ${s.bg}`}>
             <p className={`text-xs font-semibold ${s.text} opacity-75`}>{s.label}</p>
-            <p className={`text-3xl font-extrabold ${s.text} tracking-tight`}>{s.value}</p>
+            <p className={`text-3xl font-extrabold ${s.text} tracking-tight`}>
+              {loading ? '…' : s.value}
+            </p>
             <p className={`text-xs ${s.text} opacity-60 mt-1`}>{s.sub}</p>
           </div>
         ))}
       </div>
 
-      {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Bar chart */}
-        <div className="card p-6 lg:col-span-2">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="font-semibold text-brand-dark">Weekly Token Usage</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Tokens consumed per day</p>
-            </div>
-            <BarChart3 className="w-5 h-5 text-slate-300" />
-          </div>
-          <div className="flex items-end gap-3 h-32">
-            {weekData.map(d => (
-              <div key={d.day} className="flex-1 flex flex-col items-center gap-1">
-                <span className="text-[10px] text-slate-400 font-mono">
-                  {d.tokens >= 1000 ? `${(d.tokens / 1000).toFixed(1)}k` : d.tokens}
-                </span>
-                <div
-                  className="w-full rounded-t-lg bg-brand-blue/70 hover:bg-brand-blue transition-all duration-200"
-                  style={{ height: `${(d.tokens / maxTokens) * 100}%` }}
-                />
-                <span className="text-[10px] text-slate-400">{d.day}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Summary card */}
-        <div className="card p-6 flex flex-col justify-between">
-          <h3 className="font-semibold text-brand-dark">This Week</h3>
-          <div className="space-y-3 mt-4">
-            {[
-              { label: 'Total tokens',   val: '43,300', color: 'bg-brand-blue' },
-              { label: 'Total queries',  val: '124',     color: 'bg-brand-teal' },
-              { label: 'Avg per query',  val: '349',     color: 'bg-brand-coral' },
-              { label: 'Peak day',       val: 'Thursday', color: 'bg-brand-lime' },
-            ].map(m => (
-              <div key={m.label} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${m.color}`} />
-                  <span className="text-xs text-slate-500">{m.label}</span>
+      {/* All periods breakdown */}
+      {!loading && usage && (
+        <div className="card p-6">
+          <h3 className="font-semibold text-brand-dark mb-4">Breakdown by Period</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {(['daily', 'weekly', 'monthly', 'all_time'] as const).map(p => {
+              const period = usage.periods[p];
+              return (
+                <div key={p} className="bg-slate-50 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
+                    {PERIOD_LABELS[p]}
+                  </p>
+                  <p className="text-2xl font-bold text-brand-dark">
+                    {formatTokens(period?.total_tokens || 0)}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">tokens</p>
+                  <p className="text-sm font-semibold text-brand-teal mt-2">
+                    {(period?.total_queries || 0)} queries
+                  </p>
                 </div>
-                <span className="text-sm font-semibold text-brand-dark">{m.val}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            <p className="text-xs text-slate-400">Budget used</p>
-            <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
-              <div className="h-full w-[45%] rounded-full bg-brand-blue" />
-            </div>
-            <div className="flex justify-between mt-1">
-              <span className="text-xs text-slate-400">45%</span>
-              <span className="text-xs text-slate-400">50K limit</span>
-            </div>
+              );
+            })}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Recent queries table */}
+      {/* Recent queries */}
       <div className="card overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100">
           <h3 className="font-semibold text-brand-dark">Recent Queries</h3>
-          <p className="text-xs text-slate-400 mt-0.5">Your last 5 interactions</p>
+          <p className="text-xs text-slate-400 mt-0.5">Your last 10 chat interactions</p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full data-table">
-            <thead>
-              <tr>
-                <th>Query</th>
-                <th>Tokens</th>
-                <th>Date</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentQueries.map((q, i) => (
-                <tr key={i}>
-                  <td className="max-w-xs truncate font-medium text-brand-dark">{q.query}</td>
-                  <td className="font-mono text-sm text-slate-500">{q.tokens || '—'}</td>
-                  <td className="text-slate-400 text-xs">{q.date}</td>
-                  <td>
-                    <span className={`badge ${q.status === 'Success' ? 'bg-brand-teal/10 text-brand-teal' : 'bg-brand-coral/10 text-brand-coral'}`}>
-                      {q.status}
-                    </span>
-                  </td>
+
+        {loading ? (
+          <div className="py-12 text-center">
+            <RefreshCw className="w-8 h-8 mx-auto mb-2 text-brand-blue animate-spin" />
+            <p className="text-slate-400 text-sm">Loading queries...</p>
+          </div>
+        ) : queries.length === 0 ? (
+          <div className="py-12 text-center">
+            <MessageSquare className="w-8 h-8 mx-auto mb-2 text-slate-200" />
+            <p className="text-slate-400 text-sm">No queries yet. Start a chat to see your history.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full data-table">
+              <thead>
+                <tr>
+                  <th>Query</th>
+                  <th>Tokens</th>
+                  <th>Date</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {queries.map((q, i) => {
+                  // details field contains "Query: <text>" from the audit log
+                  const queryText = q.details?.replace(/^Query:\s*/i, '') ?? q.action;
+                  return (
+                    <tr key={i}>
+                      <td
+                        className="max-w-xs truncate font-medium text-brand-dark"
+                        title={queryText}
+                      >
+                        {queryText}
+                      </td>
+                      <td className="font-mono text-sm text-slate-500">
+                        {q.total_tokens ? q.total_tokens.toLocaleString() : '—'}
+                      </td>
+                      <td className="text-slate-400 text-xs whitespace-nowrap">
+                        {formatTimestamp(q.timestamp)}
+                      </td>
+                      <td>
+                        <span className={`badge ${
+                          q.success
+                            ? 'bg-brand-teal/10 text-brand-teal'
+                            : 'bg-brand-coral/10 text-brand-coral'
+                        }`}>
+                          {q.success ? 'Success' : 'Failed'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
