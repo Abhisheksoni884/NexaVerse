@@ -27,17 +27,15 @@ const statusBadge = {
 };
 
 const categoryColor: Record<string, string> = {
-  general:     'bg-slate-100 text-slate-600',
-  HR:          'bg-brand-coral/10 text-brand-coral',
-  Finance:     'bg-brand-teal/10 text-brand-teal',
-  Engineering: 'bg-brand-blue/10 text-brand-blue',
-  Legal:       'bg-purple-50 text-purple-600',
-  Strategy:    'bg-brand-lime/30 text-brand-dark',
-  Marketing:   'bg-pink-50 text-pink-600',
-  Sales:       'bg-orange-50 text-orange-600',
+  general:      'bg-slate-100 text-slate-600',
+  hr:           'bg-brand-coral/10 text-brand-coral',
+  finance:      'bg-brand-teal/10 text-brand-teal',
+  technical:    'bg-brand-blue/10 text-brand-blue',
+  legal:        'bg-purple-50 text-purple-600',
+  confidential: 'bg-brand-lime/30 text-brand-dark',
 };
 
-const CATEGORIES = ['general', 'HR', 'Finance', 'Engineering', 'Legal', 'Strategy', 'Marketing', 'Sales'];
+const CATEGORIES = ['general', 'finance', 'hr', 'legal', 'technical', 'confidential'];
 
 export function DocumentLibrary() {
   const { user } = useAuth();

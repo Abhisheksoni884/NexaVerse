@@ -182,14 +182,14 @@ async def get_user_token_summary(username: str, period: str = "all-time") -> Dic
                 SUM(c.total_tokens) AS total_tokens,
                 SUM(c.prompt_tokens) AS prompt_tokens,
                 SUM(c.completion_tokens) AS completion_tokens,
-                COUNT(1) AS query_count
+                COUNT(1) AS total_queries
             FROM c
             WHERE c.username = @username {period_filter}
         """
         results = list(container.query_items(
             query=query,
             parameters=[{"name": "@username", "value": username}],
-            enable_cross_partition_query=True,
+            partition_key=username,
         ))
 
         if results and results[0].get("total_tokens") is not None:
@@ -200,14 +200,14 @@ async def get_user_token_summary(username: str, period: str = "all-time") -> Dic
                 "total_tokens": r.get("total_tokens", 0) or 0,
                 "prompt_tokens": r.get("prompt_tokens", 0) or 0,
                 "completion_tokens": r.get("completion_tokens", 0) or 0,
-                "query_count": r.get("query_count", 0) or 0,
+                "total_queries": r.get("total_queries", 0) or 0,
             }
 
-        return {"username": username, "period": period, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "query_count": 0}
+        return {"username": username, "period": period, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_queries": 0}
 
     except Exception as e:
         logger.error(f"Failed to get token summary for {username}: {e}")
-        return {"username": username, "period": period, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "query_count": 0}
+        return {"username": username, "period": period, "total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_queries": 0}
 
 
 async def get_all_users_token_summary() -> List[Dict[str, Any]]:
@@ -217,15 +217,38 @@ async def get_all_users_token_summary() -> List[Dict[str, Any]]:
         query = """
             SELECT
                 c.username,
-                SUM(c.total_tokens) AS total_tokens,
-                SUM(c.prompt_tokens) AS prompt_tokens,
-                SUM(c.completion_tokens) AS completion_tokens,
-                COUNT(1) AS query_count
+                c.total_tokens,
+                c.prompt_tokens,
+                c.completion_tokens
             FROM c
-            GROUP BY c.username
-            ORDER BY SUM(c.total_tokens) DESC
         """
-        results = list(container.query_items(query=query, enable_cross_partition_query=True))
+        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+        
+        # Group in python since Cosmos SDK doesn't support multiple aggregates in cross-partition query
+        summary_map: Dict[str, Dict[str, Any]] = {}
+        for item in items:
+            uname = item.get("username")
+            if not uname: continue
+            
+            if uname not in summary_map:
+                summary_map[uname] = {
+                    "username": uname,
+                    "total_tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "query_count": 0,
+                    "total_queries": 0
+                }
+            
+            s = summary_map[uname]
+            s["total_tokens"] += (item.get("total_tokens") or 0)
+            s["prompt_tokens"] += (item.get("prompt_tokens") or 0)
+            s["completion_tokens"] += (item.get("completion_tokens") or 0)
+            s["query_count"] += 1
+            s["total_queries"] += 1
+
+        results = list(summary_map.values())
+        results.sort(key=lambda x: x.get("total_tokens", 0) or 0, reverse=True)
         return results
     except Exception as e:
         logger.error(f"Failed to get all-users token summary: {e}")
@@ -237,7 +260,7 @@ async def get_recent_queries(username: str, limit: int = 10) -> List[Dict[str, A
     try:
         container = _get_audit_container()
         query = f"""
-            SELECT c.timestamp, c.details, c.total_tokens, c.session_id
+            SELECT c.timestamp, c.details, c.total_tokens, c.session_id, c.success
             FROM c
             WHERE c.username = @username AND c.action = 'chat_query'
             ORDER BY c.timestamp DESC
