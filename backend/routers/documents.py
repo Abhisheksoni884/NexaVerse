@@ -33,15 +33,18 @@ from services.blob_service import upload_file_to_blob, delete_blob, get_blob_nam
 from services.document_intel import extract_text_from_file
 from services.search_service import index_document_chunks, delete_document_chunks
 from services.openai_service import generate_embeddings_batch
-from services.cosmos_service import write_audit_log, write_token_usage
+from services.cosmos_service import (
+    write_audit_log, 
+    write_token_usage,
+    save_document_metadata,
+    get_document_metadata,
+    get_all_documents_metadata,
+    delete_document_metadata
+)
 from utils.chunking import chunk_pages
 from utils.logging import logger
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
-
-# ── In-memory document store (replace with Cosmos DB or SQL in production) ────
-# In a real app this would be persisted to Cosmos DB or a relational database.
-_document_store: dict[str, DocumentMetadata] = {}
 
 # Supported MIME types
 ALLOWED_CONTENT_TYPES = {
@@ -53,32 +56,32 @@ ALLOWED_CONTENT_TYPES = {
 }
 
 
-def _update_doc_status(doc_id: str, status: DocumentStatus, error: Optional[str] = None):
-    if doc_id in _document_store:
-        _document_store[doc_id].status = status
-        _document_store[doc_id].updated_at = datetime.utcnow()
-        if error:
-            _document_store[doc_id].error_message = error
-
-
 async def _process_document(doc_id: str, file_content: bytes, content_type: str, settings_ref):
     """
     Background task: Extract → Chunk → Embed → Index
     Updates document status at each step.
     """
-    doc = _document_store.get(doc_id)
+    doc = await get_document_metadata(doc_id)
     if not doc:
         return
 
+    async def update_status(status: DocumentStatus, error: Optional[str] = None):
+        doc.status = status
+        doc.updated_at = datetime.utcnow()
+        if error:
+            doc.error_message = error
+        await save_document_metadata(doc)
+
     try:
         # Step 1: Extract text with Document Intelligence
-        _update_doc_status(doc_id, DocumentStatus.extracting)
+        await update_status(DocumentStatus.extracting)
         logger.info(f"[{doc_id}] Extracting text...")
         extracted = await extract_text_from_file(file_content, content_type)
         doc.page_count = extracted["page_count"]
+        await save_document_metadata(doc)
 
         # Step 2: Chunk the extracted pages
-        _update_doc_status(doc_id, DocumentStatus.chunking)
+        await update_status(DocumentStatus.chunking)
         logger.info(f"[{doc_id}] Chunking {len(extracted['pages'])} pages...")
         chunks = chunk_pages(
             pages=extracted["pages"],
@@ -89,10 +92,11 @@ async def _process_document(doc_id: str, file_content: bytes, content_type: str,
             allowed_roles=doc.allowed_roles,
         )
         doc.chunk_count = len(chunks)
+        await save_document_metadata(doc)
         logger.info(f"[{doc_id}] Created {len(chunks)} chunks")
 
         # Step 3: Generate embeddings (batch for efficiency)
-        _update_doc_status(doc_id, DocumentStatus.indexing)
+        await update_status(DocumentStatus.indexing)
         logger.info(f"[{doc_id}] Generating embeddings...")
         texts = [chunk.content for chunk in chunks]
         embeddings = await generate_embeddings_batch(texts)
@@ -115,12 +119,12 @@ async def _process_document(doc_id: str, file_content: bytes, content_type: str,
         indexed = await index_document_chunks(chunks)
         logger.info(f"[{doc_id}] Indexed {indexed} chunks")
 
-        _update_doc_status(doc_id, DocumentStatus.ready)
+        await update_status(DocumentStatus.ready)
         logger.info(f"[{doc_id}] Document processing complete!")
 
     except Exception as e:
         logger.error(f"[{doc_id}] Processing failed: {e}")
-        _update_doc_status(doc_id, DocumentStatus.failed, error=str(e))
+        await update_status(DocumentStatus.failed, error=str(e))
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -198,7 +202,7 @@ async def upload_document(
         content_type=file.content_type,
         allowed_roles=roles_list,
     )
-    _document_store[doc_id] = doc_meta
+    await save_document_metadata(doc_meta)
 
     # Audit log
     await write_audit_log(AuditLog(
@@ -230,9 +234,10 @@ async def list_documents(current_user: User = Depends(get_current_user)):
     Admin sees all. Analyst sees analyst + viewer docs. Viewer sees only viewer docs.
     """
     allowed_roles = get_allowed_roles_for_search(current_user)
+    docs = await get_all_documents_metadata()
 
     result = []
-    for doc in _document_store.values():
+    for doc in docs:
         # RBAC: only show docs where user's role is in allowed_roles
         if any(role in doc.allowed_roles for role in allowed_roles):
             result.append(DocumentListItem(
@@ -253,7 +258,7 @@ async def list_documents(current_user: User = Depends(get_current_user)):
 @router.get("/{document_id}/status")
 async def get_document_status(document_id: str, current_user: User = Depends(get_current_user)):
     """Poll the processing status of a document."""
-    doc = _document_store.get(document_id)
+    doc = await get_document_metadata(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -274,7 +279,7 @@ async def delete_document(
     current_user: User = Depends(require_admin),
 ):
     """Delete a document (Admin only). Removes from Blob Storage and Search index."""
-    doc = _document_store.get(document_id)
+    doc = await get_document_metadata(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -285,8 +290,8 @@ async def delete_document(
     blob_name = get_blob_name_from_url(doc.blob_url)
     await delete_blob(blob_name)
 
-    # Remove from store
-    del _document_store[document_id]
+    # Remove from Cosmos DB
+    await delete_document_metadata(document_id)
 
     await write_audit_log(AuditLog(
         username=current_user.username,
@@ -310,13 +315,14 @@ async def update_document_category(
     current_user: User = Depends(require_admin),
 ):
     """Update document category (Admin only)."""
-    doc = _document_store.get(document_id)
+    doc = await get_document_metadata(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
     old_category = doc.category
     doc.category = body.category
     doc.updated_at = datetime.utcnow()
+    await save_document_metadata(doc)
 
     await write_audit_log(AuditLog(
         username=current_user.username,

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     azure_cosmos_database: str = Field("rag-database", alias="AZURE_COSMOS_DATABASE")
     azure_cosmos_audit_container: str = Field("audit-logs", alias="AZURE_COSMOS_AUDIT_CONTAINER")
     azure_cosmos_tokens_container: str = Field("token-usage", alias="AZURE_COSMOS_TOKENS_CONTAINER")
+    azure_cosmos_documents_container: str = Field("documents-meta", alias="AZURE_COSMOS_DOCUMENTS_CONTAINER")
 
     # ── Azure Content Safety ───────────────────────────────────────────────────
     azure_content_safety_endpoint: str = Field(..., alias="AZURE_CONTENT_SAFETY_ENDPOINT")

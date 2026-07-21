@@ -14,6 +14,7 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 
 from config import get_settings
 from models.audit import AuditLog, TokenUsageRecord, TokenUsageSummary
+from models.document import DocumentMetadata
 from utils.logging import logger
 
 settings = get_settings()
@@ -44,6 +45,12 @@ def _get_tokens_container():
     return db.get_container_client(settings.azure_cosmos_tokens_container)
 
 
+def _get_documents_container():
+    client = get_cosmos_client()
+    db = client.get_database_client(settings.azure_cosmos_database)
+    return db.get_container_client(settings.azure_cosmos_documents_container)
+
+
 def ensure_cosmos_containers() -> None:
     """
     Create Cosmos DB database and containers if they don't exist.
@@ -68,6 +75,13 @@ def ensure_cosmos_containers() -> None:
         partition_key=PartitionKey(path="/username"),
     )
     logger.info(f"Token usage container ready: {settings.azure_cosmos_tokens_container}")
+
+    # Documents metadata container — partitioned by id
+    db.create_container_if_not_exists(
+        id=settings.azure_cosmos_documents_container,
+        partition_key=PartitionKey(path="/id"),
+    )
+    logger.info(f"Documents container ready: {settings.azure_cosmos_documents_container}")
 
 
 # ── Audit Logging ─────────────────────────────────────────────────────────────
@@ -275,3 +289,44 @@ async def get_recent_queries(username: str, limit: int = 10) -> List[Dict[str, A
     except Exception as e:
         logger.error(f"Failed to get recent queries: {e}")
         return []
+
+# ── Document Metadata ─────────────────────────────────────────────────────────
+
+async def save_document_metadata(doc: DocumentMetadata) -> None:
+    try:
+        container = _get_documents_container()
+        item = doc.model_dump()
+        item["created_at"] = doc.created_at.isoformat()
+        item["updated_at"] = doc.updated_at.isoformat()
+        container.upsert_item(item)
+    except Exception as e:
+        logger.error(f"Failed to save document metadata: {e}")
+
+async def get_document_metadata(doc_id: str) -> Optional[DocumentMetadata]:
+    try:
+        container = _get_documents_container()
+        response = container.read_item(item=doc_id, partition_key=doc_id)
+        return DocumentMetadata(**response)
+    except exceptions.CosmosResourceNotFoundError:
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get document metadata: {e}")
+        return None
+
+async def get_all_documents_metadata() -> List[DocumentMetadata]:
+    try:
+        container = _get_documents_container()
+        items = list(container.query_items(query="SELECT * FROM c", enable_cross_partition_query=True))
+        return [DocumentMetadata(**item) for item in items]
+    except Exception as e:
+        logger.error(f"Failed to list documents metadata: {e}")
+        return []
+
+async def delete_document_metadata(doc_id: str) -> None:
+    try:
+        container = _get_documents_container()
+        container.delete_item(item=doc_id, partition_key=doc_id)
+    except exceptions.CosmosResourceNotFoundError:
+        pass
+    except Exception as e:
+        logger.error(f"Failed to delete document metadata: {e}")
