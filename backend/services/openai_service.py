@@ -1,7 +1,10 @@
 """
 services/openai_service.py — Azure OpenAI embeddings and streaming chat completions.
 
-Uses the openai>=1.0 client pointing at Azure OpenAI endpoints.
+Uses the openai>=1.0 client pointing at Azure OpenAI (GPT-5) endpoints.
+NOTE: GPT-5 is a reasoning model — temperature is not supported.
+      Use max_completion_tokens (not max_tokens) per latest Azure OpenAI docs.
+      API version: 2024-12-01-preview or later.
 """
 from typing import List, AsyncGenerator, Optional
 import json
@@ -188,12 +191,12 @@ async def stream_chat_completion(
         model=settings.azure_openai_chat_deployment,
         messages=full_messages,
         stream=True,
-        temperature=0.1,       # Low temp for factual grounded responses
-        max_tokens=2048,
+        max_completion_tokens=16384,  # GPT-5: use max_completion_tokens, not max_tokens
     )
 
     async for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
+        # chunk.choices may be empty on the final usage-only chunk
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
 
@@ -213,8 +216,8 @@ async def get_chat_completion_with_usage(
         model=settings.azure_openai_chat_deployment,
         messages=full_messages,
         stream=False,
-        temperature=0.1,
-        max_tokens=2048,
+        # NOTE: temperature is NOT supported for GPT-5 (reasoning models) — omitted intentionally
+        max_completion_tokens=16384,  # GPT-5: use max_completion_tokens, not max_tokens
     )
 
     return {

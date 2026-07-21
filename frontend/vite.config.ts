@@ -5,17 +5,17 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: 'dist',
+    outDir: '../backend/static',
+    emptyOutDir: true,
     sourcemap: false,
   },
   server: {
     port: 5173,
     proxy: {
-      // During local dev, /api/* → FastAPI backend on port 8000
+      // During local dev, proxy API calls to FastAPI backend on port 8000
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },

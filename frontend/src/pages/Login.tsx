@@ -16,7 +16,6 @@ export function Login() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<Role>('admin');
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -25,21 +24,19 @@ export function Login() {
     if (isAuthenticated) navigate('/chat');
   }, [isAuthenticated, navigate]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-    setTimeout(() => {
-      const match = DEMO_CREDS.find(
-        c => c.user === username.trim().toLowerCase() && c.pass === password && c.role === role
-      );
-      if (match) {
-        login(username.trim().toLowerCase(), role);
-      } else {
-        setError('Invalid credentials. Check username, password and role.');
-      }
+    
+    try {
+      await login(username.trim().toLowerCase(), password);
+      // Navigation will happen automatically via useEffect when isAuthenticated changes
+    } catch (err: any) {
+      setError(err.message || 'Login failed. Please check your credentials.');
+    } finally {
       setIsLoading(false);
-    }, 700);
+    }
   };
 
   return (
@@ -145,30 +142,6 @@ export function Login() {
               </div>
             </div>
 
-            {/* Role selector */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5 uppercase tracking-wide">
-                Role
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['admin', 'analyst', 'viewer'] as Role[]).map(r => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setRole(r)}
-                    className={cn(
-                      'py-2 rounded-xl text-xs font-semibold capitalize transition-all border',
-                      role === r
-                        ? 'bg-brand-teal text-white border-brand-teal shadow-sm'
-                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-brand-teal hover:text-brand-teal'
-                    )}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <button
               type="submit"
               disabled={isLoading}
@@ -188,7 +161,7 @@ export function Login() {
                 <button
                   key={c.role}
                   type="button"
-                  onClick={() => { setUsername(c.user); setPassword(c.pass); setRole(c.role); }}
+                  onClick={() => { setUsername(c.user); setPassword(c.pass); }}
                   className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white border border-transparent hover:border-slate-200 transition-all group"
                 >
                   <span className="text-xs font-medium text-slate-800 capitalize">{c.role}</span>

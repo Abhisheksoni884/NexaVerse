@@ -12,7 +12,7 @@ azure-ai-contentsafety==1.0.0
 azure-identity==1.20.0
 
 # OpenAI (Azure OpenAI uses the same client)
-openai==1.59.7
+openai==1.97.1
 
 # Auth
 python-jose[cryptography]==3.3.0

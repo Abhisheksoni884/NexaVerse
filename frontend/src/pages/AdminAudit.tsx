@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, Search, Filter, ShieldAlert, ChevronDown } from 'lucide-react';
+import { Download, Search, ShieldAlert } from 'lucide-react';
 import { cn } from '../utils/cn';
 
 interface AuditLog {

@@ -3,13 +3,7 @@ import { Send, Bot, User as UserIcon, BookOpen, AlertCircle, FileText, X, Sparkl
 import ReactMarkdown from 'react-markdown';
 import { useAuth } from '../context/AuthContext';
 import { cn } from '../utils/cn';
-
-interface Citation {
-  id: string;
-  document: string;
-  page: number;
-  excerpt: string;
-}
+import { chatAPI, type Citation } from '../utils/api';
 
 interface Message {
   id: string;
@@ -18,13 +12,6 @@ interface Message {
   citations?: Citation[];
   isStreaming?: boolean;
 }
-
-const MOCK_CITATIONS: Citation[] = [
-  { id: '1', document: 'HR_Policy_2024.pdf', page: 12, excerpt: 'Employees are entitled to 20 days of paid time off per year, accrued at 1.67 days per month.' },
-  { id: '2', document: 'Q3_Financials.docx', page: 5, excerpt: 'Revenue grew by 15% in Q3 YoY, driven by new enterprise product launches in EMEA.' },
-];
-
-const MOCK_RESPONSE = `Based on the enterprise documents retrieved, here is the information you requested:\n\nAccording to the **HR Policy** document, employees receive 20 days of paid time off per year [1]. Additionally, our **Q3 financials** show revenue grew by 15% year-over-year [2].\n\nIs there anything else you'd like to know?`;
 
 export function Chat() {
   const { user } = useAuth();
@@ -36,12 +23,24 @@ export function Chat() {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
+  const [error, setError] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const sessionId = useRef<string>(`session-${Date.now()}`);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    // Cleanup EventSource on unmount
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
     e.preventDefault();
@@ -51,18 +50,75 @@ export function Chat() {
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsStreaming(true);
+    setError('');
 
     const botId = (Date.now() + 1).toString();
-    setMessages(prev => [...prev, { id: botId, role: 'assistant', content: '', isStreaming: true, citations: MOCK_CITATIONS }]);
+    let botMessage: Message = { 
+      id: botId, 
+      role: 'assistant', 
+      content: '', 
+      isStreaming: true,
+      citations: []
+    };
+    setMessages(prev => [...prev, botMessage]);
 
-    let text = '';
-    for (const word of MOCK_RESPONSE.split(' ')) {
-      await new Promise(r => setTimeout(r, 45));
-      text += (text ? ' ' : '') + word;
-      setMessages(prev => prev.map(m => m.id === botId ? { ...m, content: text } : m));
+    try {
+      // Close any existing connection
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+
+      eventSourceRef.current = chatAPI.streamChat(
+        {
+          message: userMsg.content,
+          session_id: sessionId.current,
+        },
+        // onCitation
+        (citations) => {
+          botMessage.citations = citations.map((c, idx) => ({
+            ...c,
+            id: (idx + 1).toString()
+          }));
+          setMessages(prev => prev.map(m => m.id === botId ? { ...m, citations: botMessage.citations } : m));
+        },
+        // onToken
+        (token) => {
+          botMessage.content += token;
+          setMessages(prev => prev.map(m => m.id === botId ? { ...m, content: botMessage.content } : m));
+        },
+        // onDone
+        (totalTokens) => {
+          console.log('Chat completed. Total tokens:', totalTokens);
+          setMessages(prev => prev.map(m => m.id === botId ? { ...m, isStreaming: false } : m));
+          setIsStreaming(false);
+          eventSourceRef.current = null;
+        },
+        // onError
+        (errorMsg) => {
+          console.error('Chat error:', errorMsg);
+          setError(errorMsg);
+          setMessages(prev => prev.map(m => m.id === botId 
+            ? { ...m, content: `Error: ${errorMsg}`, isStreaming: false } 
+            : m
+          ));
+          setIsStreaming(false);
+          eventSourceRef.current = null;
+        },
+        // onReplace (content safety)
+        (replacementContent) => {
+          botMessage.content = replacementContent;
+          setMessages(prev => prev.map(m => m.id === botId ? { ...m, content: replacementContent } : m));
+        }
+      );
+    } catch (err: any) {
+      console.error('Failed to start chat stream:', err);
+      setError(err.message || 'Failed to connect to chat service');
+      setMessages(prev => prev.map(m => m.id === botId 
+        ? { ...m, content: 'Failed to connect to chat service. Please try again.', isStreaming: false } 
+        : m
+      ));
+      setIsStreaming(false);
     }
-    setMessages(prev => prev.map(m => m.id === botId ? { ...m, isStreaming: false } : m));
-    setIsStreaming(false);
   };
 
   return (
@@ -165,6 +221,11 @@ export function Chat() {
 
         {/* Input */}
         <div className="px-5 py-4 border-t border-slate-100 bg-white">
+          {error && (
+            <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 animate-fade-in">
+              {error}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="flex items-end gap-3">
             <textarea
               ref={textareaRef}
@@ -217,9 +278,15 @@ export function Chat() {
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Page</p>
-              <span className="inline-block px-3 py-1.5 bg-brand-coral text-white text-sm font-semibold rounded-lg">
-                Page {activeCitation.page}
-              </span>
+              {activeCitation.page ? (
+                <span className="inline-block px-3 py-1.5 bg-brand-coral text-white text-sm font-semibold rounded-lg">
+                  Page {activeCitation.page}
+                </span>
+              ) : (
+                <span className="inline-block px-3 py-1.5 bg-slate-200 text-slate-600 text-sm font-medium rounded-lg">
+                  Page not specified
+                </span>
+              )}
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Excerpt</p>

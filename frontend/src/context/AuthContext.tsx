@@ -1,4 +1,6 @@
-import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import { authAPI } from '../utils/api';
 
 export type Role = 'admin' | 'analyst' | 'viewer';
 
@@ -10,7 +12,7 @@ export interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (username: string, role: Role) => void;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -23,20 +25,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate checking local storage for a token
+    // Check local storage for existing token and validate it
     const storedUser = localStorage.getItem('user');
     if (storedUser) {
-      setUser(JSON.parse(storedUser));
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
+        
+        // Optionally verify the token is still valid
+        authAPI.getProfile()
+          .then(profile => {
+            // Token is valid, update user with fresh profile data
+            const updatedUser = { ...parsedUser, username: profile.username, role: profile.role as Role };
+            setUser(updatedUser);
+            localStorage.setItem('user', JSON.stringify(updatedUser));
+          })
+          .catch(() => {
+            // Token expired or invalid
+            setUser(null);
+            localStorage.removeItem('user');
+          })
+          .finally(() => {
+            setIsLoading(false);
+          });
+      } catch (e) {
+        console.error('Failed to parse stored user', e);
+        localStorage.removeItem('user');
+        setIsLoading(false);
+      }
+    } else {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
 
-  const login = (username: string, role: Role) => {
-    // Simulated token
-    const mockToken = btoa(username + ':' + Date.now());
-    const newUser = { username, role, token: mockToken };
-    setUser(newUser);
-    localStorage.setItem('user', JSON.stringify(newUser));
+  const login = async (username: string, password: string) => {
+    try {
+      const response = await authAPI.login({ username, password });
+      const newUser: User = {
+        username: response.username,
+        role: response.role as Role,
+        token: response.access_token,
+      };
+      setUser(newUser);
+      localStorage.setItem('user', JSON.stringify(newUser));
+    } catch (error: any) {
+      console.error('Login failed:', error);
+      throw new Error(error.response?.data?.detail || 'Login failed. Please check your credentials.');
+    }
   };
 
   const logout = () => {

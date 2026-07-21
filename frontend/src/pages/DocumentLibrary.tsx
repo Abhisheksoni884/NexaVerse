@@ -1,63 +1,185 @@
-import { useState } from 'react';
-import { UploadCloud, FileText, Search, Trash2, CheckCircle2, Clock, AlertCircle, Tag, Plus, X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { UploadCloud, FileText, Search, Trash2, CheckCircle2, Clock, AlertCircle, Plus, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { cn } from '../utils/cn';
+import { documentsAPI, type Document as ApiDocument } from '../utils/api';
 
 interface Document {
   id: string;
   name: string;
-  status: 'ready' | 'processing' | 'failed';
-  pageCount: number;
+  status: 'uploading' | 'extracting' | 'chunking' | 'indexing' | 'ready' | 'failed';
+  pageCount?: number;
   uploadDate: string;
   category: string;
   uploader: string;
-  size: string;
+  size?: string;
+  error?: string;
 }
 
-const mockDocuments: Document[] = [
-  { id: '1', name: 'HR_Policy_2024.pdf',          status: 'ready',      pageCount: 24,  uploadDate: '2024-03-10', category: 'HR',          uploader: 'admin',   size: '2.4 MB' },
-  { id: '2', name: 'Q3_Financials.docx',           status: 'ready',      pageCount: 15,  uploadDate: '2024-03-12', category: 'Finance',     uploader: 'analyst', size: '1.1 MB' },
-  { id: '3', name: 'Architecture_Diagram.png',     status: 'processing', pageCount: 1,   uploadDate: '2024-03-15', category: 'Engineering', uploader: 'analyst', size: '4.5 MB' },
-  { id: '4', name: 'Legacy_Contracts_Scanned.pdf', status: 'failed',     pageCount: 120, uploadDate: '2024-03-16', category: 'Legal',       uploader: 'admin',   size: '15.2 MB' },
-  { id: '5', name: 'Product_Roadmap_2025.pdf',     status: 'ready',      pageCount: 32,  uploadDate: '2024-03-17', category: 'Strategy',    uploader: 'admin',   size: '3.8 MB' },
-];
-
 const statusBadge = {
+  uploading:  { label: 'Uploading',  className: 'bg-brand-blue/10 text-brand-blue',  Icon: Clock },
+  extracting: { label: 'Extracting', className: 'bg-brand-blue/10 text-brand-blue',  Icon: Clock },
+  chunking:   { label: 'Chunking',   className: 'bg-brand-blue/10 text-brand-blue',  Icon: Clock },
+  indexing:   { label: 'Indexing',   className: 'bg-brand-blue/10 text-brand-blue',  Icon: Clock },
   ready:      { label: 'Ready',      className: 'bg-brand-teal/10 text-brand-teal',  Icon: CheckCircle2 },
-  processing: { label: 'Processing', className: 'bg-brand-blue/10 text-brand-blue',  Icon: Clock },
   failed:     { label: 'Failed',     className: 'bg-brand-coral/10 text-brand-coral', Icon: AlertCircle },
 };
 
 const categoryColor: Record<string, string> = {
+  general:     'bg-slate-100 text-slate-600',
   HR:          'bg-brand-coral/10 text-brand-coral',
   Finance:     'bg-brand-teal/10 text-brand-teal',
   Engineering: 'bg-brand-blue/10 text-brand-blue',
   Legal:       'bg-purple-50 text-purple-600',
   Strategy:    'bg-brand-lime/30 text-brand-dark',
+  Marketing:   'bg-pink-50 text-pink-600',
+  Sales:       'bg-orange-50 text-orange-600',
 };
+
+const CATEGORIES = ['general', 'HR', 'Finance', 'Engineering', 'Legal', 'Strategy', 'Marketing', 'Sales'];
 
 export function DocumentLibrary() {
   const { user } = useAuth();
-  const [documents, setDocuments] = useState<Document[]>(mockDocuments);
+  const [documents, setDocuments] = useState<Document[]>([]);
   const [search, setSearch] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadCategory, setUploadCategory] = useState('general');
+  const [uploadProgress, setUploadProgress] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const canUpload = user?.role === 'admin' || user?.role === 'analyst';
   const canDelete = user?.role === 'admin';
 
-  const filtered = documents.filter(doc => {
-    if (user?.role === 'viewer' && doc.category === 'HR') return false;
-    return !search || doc.name.toLowerCase().includes(search.toLowerCase());
+  useEffect(() => {
+    loadDocuments();
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const loadDocuments = async () => {
+    try {
+      setError('');
+      const docs = await documentsAPI.list();
+      setDocuments(docs.map(mapApiDocument));
+      setLoading(false);
+
+      // Check if any documents are processing
+      const processingDocs = docs.filter(d => 
+        d.status !== 'ready' && d.status !== 'failed'
+      );
+      
+      if (processingDocs.length > 0 && !pollIntervalRef.current) {
+        // Start polling for status updates
+        pollIntervalRef.current = setInterval(pollDocumentStatus, 3000);
+      } else if (processingDocs.length === 0 && pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    } catch (err: any) {
+      console.error('Failed to load documents:', err);
+      setError(err.response?.data?.detail || 'Failed to load documents');
+      setLoading(false);
+    }
+  };
+
+  const pollDocumentStatus = async () => {
+    const processingDocs = documents.filter(d => 
+      d.status !== 'ready' && d.status !== 'failed'
+    );
+    
+    for (const doc of processingDocs) {
+      try {
+        const status = await documentsAPI.getStatus(doc.id);
+        setDocuments(prev => prev.map(d => 
+          d.id === doc.id 
+            ? { ...d, status: status.status as any, error: status.error }
+            : d
+        ));
+      } catch (err) {
+        console.error(`Failed to poll status for ${doc.id}`, err);
+      }
+    }
+
+    // Stop polling if all done
+    const stillProcessing = documents.some(d => 
+      d.status !== 'ready' && d.status !== 'failed'
+    );
+    if (!stillProcessing && pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  const mapApiDocument = (doc: ApiDocument): Document => ({
+    id: doc.id,
+    name: doc.name,
+    status: doc.status,
+    pageCount: doc.page_count,
+    uploadDate: new Date(doc.upload_date).toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    }),
+    category: doc.category,
+    uploader: doc.uploader,
+    size: doc.size,
+    error: doc.error,
   });
 
-  const handleDelete = (id: string) => {
-    setDocuments(prev => prev.filter(d => d.id !== id));
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadProgress(`Uploading ${file.name}...`);
+      const uploadedDoc = await documentsAPI.upload(file, uploadCategory);
+      setDocuments(prev => [mapApiDocument(uploadedDoc), ...prev]);
+      setUploadProgress('Upload successful! Processing document...');
+      
+      // Start polling if not already
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(pollDocumentStatus, 3000);
+      }
+
+      setTimeout(() => {
+        setUploadProgress('');
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }, 2000);
+    } catch (err: any) {
+      console.error('Upload failed:', err);
+      setError(err.response?.data?.detail || 'Upload failed');
+      setUploadProgress('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+
+    try {
+      await documentsAPI.delete(id);
+      setDocuments(prev => prev.filter(d => d.id !== id));
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      setError(err.response?.data?.detail || 'Delete failed');
+    }
+  };
+
+  const filtered = documents.filter(doc => {
+    return !search || doc.name.toLowerCase().includes(search.toLowerCase());
+  });
 
   const summaryStats = [
     { label: 'Total Docs',  value: documents.length,                         color: 'bg-brand-blue/10 text-brand-blue'   },
     { label: 'Ready',       value: documents.filter(d => d.status === 'ready').length,      color: 'bg-brand-teal/10 text-brand-teal'   },
-    { label: 'Processing',  value: documents.filter(d => d.status === 'processing').length, color: 'bg-brand-lime/30 text-brand-dark'   },
+    { label: 'Processing',  value: documents.filter(d => d.status !== 'ready' && d.status !== 'failed').length, color: 'bg-brand-lime/30 text-brand-dark'   },
     { label: 'Failed',      value: documents.filter(d => d.status === 'failed').length,     color: 'bg-brand-coral/10 text-brand-coral' },
   ];
 
@@ -69,16 +191,40 @@ export function DocumentLibrary() {
           <h1 className="text-xl font-bold text-brand-dark">Document Library</h1>
           <p className="text-sm text-slate-500 mt-0.5">Manage enterprise documents available for AI retrieval</p>
         </div>
-        {canUpload && (
+        <div className="flex items-center gap-3">
           <button
-            onClick={() => setUploading(!uploading)}
-            className="btn-primary flex items-center gap-2"
+            onClick={loadDocuments}
+            disabled={loading}
+            className="btn-secondary flex items-center gap-2"
           >
-            {uploading ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {uploading ? 'Cancel' : 'Upload Document'}
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            Refresh
           </button>
-        )}
+          {canUpload && (
+            <button
+              onClick={() => setUploading(!uploading)}
+              className="btn-primary flex items-center gap-2"
+            >
+              {uploading ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              {uploading ? 'Cancel' : 'Upload Document'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Error message */}
+      {error && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3 animate-fade-in">
+          {error}
+        </div>
+      )}
+
+      {/* Upload progress */}
+      {uploadProgress && (
+        <div className="text-sm text-brand-teal bg-brand-teal/10 border border-brand-teal/20 rounded-xl px-4 py-3 animate-fade-in">
+          {uploadProgress}
+        </div>
+      )}
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -96,9 +242,35 @@ export function DocumentLibrary() {
           <div className="w-14 h-14 bg-brand-blue/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <UploadCloud className="w-7 h-7 text-brand-blue" />
           </div>
-          <h3 className="text-base font-semibold text-brand-dark mb-1">Drop files to upload</h3>
+          <h3 className="text-base font-semibold text-brand-dark mb-1">Upload a document</h3>
           <p className="text-sm text-slate-400 mb-5">PDF, DOCX, or image files up to 50 MB</p>
-          <button className="btn-secondary">Browse Files</button>
+          
+          <div className="flex flex-col items-center gap-4 max-w-sm mx-auto">
+            <div className="w-full">
+              <label className="block text-xs font-semibold text-slate-700 mb-2 text-left">Category</label>
+              <select
+                value={uploadCategory}
+                onChange={e => setUploadCategory(e.target.value)}
+                className="form-input w-full"
+              >
+                {CATEGORIES.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+            
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.doc,.png,.jpg,.jpeg"
+              onChange={handleFileSelect}
+              className="hidden"
+              id="file-upload"
+            />
+            <label htmlFor="file-upload" className="btn-secondary cursor-pointer">
+              Browse Files
+            </label>
+          </div>
         </div>
       )}
 
@@ -131,11 +303,20 @@ export function DocumentLibrary() {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="text-center py-12">
+                    <RefreshCw className="w-8 h-8 mx-auto mb-2 text-brand-blue animate-spin" />
+                    <p className="text-slate-400 text-sm">Loading documents...</p>
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center py-12">
                     <FileText className="w-8 h-8 mx-auto mb-2 text-slate-200" />
-                    <p className="text-slate-400 text-sm">No documents found</p>
+                    <p className="text-slate-400 text-sm">
+                      {search ? 'No documents match your search' : 'No documents uploaded yet'}
+                    </p>
                   </td>
                 </tr>
               ) : filtered.map(doc => {
@@ -148,8 +329,13 @@ export function DocumentLibrary() {
                           <FileText className="w-4 h-4 text-brand-blue" />
                         </div>
                         <div className="min-w-0">
-                          <p className="font-semibold text-brand-dark text-sm truncate max-w-[220px]">{doc.name}</p>
-                          <p className="text-xs text-slate-400">{doc.size} · {doc.pageCount} pages</p>
+                          <p className="font-semibold text-brand-dark text-sm truncate max-w-[220px]" title={doc.name}>
+                            {doc.name}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {doc.size ? `${doc.size}` : 'Size unknown'}
+                            {doc.pageCount ? ` · ${doc.pageCount} pages` : ''}
+                          </p>
                         </div>
                       </div>
                     </td>
@@ -159,10 +345,17 @@ export function DocumentLibrary() {
                       </span>
                     </td>
                     <td>
-                      <span className={cn('badge flex items-center gap-1 w-fit', s.className)}>
-                        <s.Icon className="w-3.5 h-3.5" />
-                        {s.label}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className={cn('badge flex items-center gap-1 w-fit', s.className)}>
+                          <s.Icon className="w-3.5 h-3.5" />
+                          {s.label}
+                        </span>
+                        {doc.error && (
+                          <p className="text-xs text-brand-coral truncate max-w-[200px]" title={doc.error}>
+                            {doc.error}
+                          </p>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <p className="text-sm text-brand-dark">{doc.uploadDate}</p>
@@ -171,8 +364,9 @@ export function DocumentLibrary() {
                     {canDelete && (
                       <td className="text-right">
                         <button
-                          onClick={() => handleDelete(doc.id)}
+                          onClick={() => handleDelete(doc.id, doc.name)}
                           className="p-2 text-slate-300 hover:text-brand-coral hover:bg-brand-coral/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                          title="Delete document"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>

@@ -4,9 +4,12 @@ main.py — FastAPI application entry point.
 Registers all routers, configures CORS, and initialises Azure services on startup.
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from config import get_settings
 from routers import auth, documents, chat, admin, usage
@@ -69,15 +72,15 @@ app.add_middleware(
 )
 
 # ── Routers ────────────────────────────────────────────────────────────────────
-app.include_router(auth.router)
-app.include_router(documents.router)
-app.include_router(chat.router)
-app.include_router(admin.router)
-app.include_router(usage.router)
+app.include_router(auth.router, prefix="/api")
+app.include_router(documents.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
+app.include_router(usage.router, prefix="/api")
 
 
 # ── Health check ───────────────────────────────────────────────────────────────
-@app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
 async def health_check():
     """Simple health check endpoint for load balancers and monitoring."""
     return {
@@ -87,10 +90,29 @@ async def health_check():
     }
 
 
-@app.get("/", tags=["Health"])
-async def root():
-    return {
-        "message": "NexaVerse Enterprise Knowledge Assistant API",
-        "docs": "/docs",
-        "health": "/health",
-    }
+# ── Serve Frontend Static Files ───────────────────────────────────────────────
+# Mount the React frontend (built to backend/static)
+# IMPORTANT: This must be the LAST mount to act as a catch-all for non-API routes
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    # Mount static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+    
+    # Serve static files in root (favicon, etc)
+    @app.get("/favicon.svg")
+    async def favicon():
+        return FileResponse(static_dir / "favicon.svg")
+    
+    @app.get("/icons.svg")
+    async def icons():
+        return FileResponse(static_dir / "icons.svg")
+    
+    # Catch-all route for SPA - serve index.html for all non-API routes
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve index.html for all routes that don't match API endpoints"""
+        return FileResponse(static_dir / "index.html")
+    
+    logger.info(f"Serving frontend from {static_dir}")
+else:
+    logger.warning(f"Static directory not found at {static_dir}. Frontend will not be served.")

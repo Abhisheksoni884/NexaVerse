@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     # ── Azure OpenAI ───────────────────────────────────────────────────────────
     azure_openai_endpoint: str = Field(..., alias="AZURE_OPENAI_ENDPOINT")
     azure_openai_api_key: str = Field(..., alias="AZURE_OPENAI_API_KEY")
-    azure_openai_api_version: str = Field("2024-12-01-preview", alias="AZURE_OPENAI_API_VERSION")
-    azure_openai_chat_deployment: str = Field("gpt-4o", alias="AZURE_OPENAI_CHAT_DEPLOYMENT")
+    azure_openai_api_version: str = Field("2025-04-01-preview", alias="AZURE_OPENAI_API_VERSION")
+    azure_openai_chat_deployment: str = Field("gpt-5", alias="AZURE_OPENAI_CHAT_DEPLOYMENT")
     azure_openai_embedding_deployment: str = Field("text-embedding-3-small", alias="AZURE_OPENAI_EMBEDDING_DEPLOYMENT")
 
     # ── Azure AI Search ────────────────────────────────────────────────────────

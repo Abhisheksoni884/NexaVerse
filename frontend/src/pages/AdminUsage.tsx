@@ -1,4 +1,4 @@
-import { BarChart2, Users, Download, TrendingUp, Activity, Clock } from 'lucide-react';
+import { Users, Download, TrendingUp, Activity, Clock } from 'lucide-react';
 
 const statCards = [
   { label: 'Total Tokens', value: '1.2M', sub: '+8% this week', bg: 'bg-brand-blue', text: 'text-white' },

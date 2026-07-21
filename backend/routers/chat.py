@@ -6,24 +6,24 @@ The full RAG pipeline:
   2. Generate query embedding
   3. Hybrid search (keyword + vector) with RBAC filters
   4. Build grounded prompt with retrieved context
-  5. Stream GPT-4o response via SSE
+  5. Stream GPT-5 response via SSE
   6. Content Safety check on output
   7. Log audit event + token usage
 
 Endpoints:
-  POST /chat/stream          → SSE streaming RAG response
+  GET  /chat/stream          → SSE streaming RAG response
   GET  /chat/history/{sid}   → Get conversation history
   DELETE /chat/history/{sid} → Clear session history
 """
 import json
 import uuid
 from datetime import datetime
-from typing import List, AsyncGenerator
+from typing import List, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from core.auth import get_current_user
+from core.auth import get_current_user, get_current_user_from_query
 from core.rbac import get_allowed_roles_for_search
 from models.user import User
 from models.chat import ChatRequest, ChatMessage, Citation, ConversationHistory
@@ -108,13 +108,14 @@ async def _rag_stream_generator(
     # Emit citations metadata to the client before streaming content
     citations = [
         {
-            "document_name": c["document_name"],
-            "page_number": c["page_number"],
+            "id": str(idx + 1),
+            "document": c["document_name"],
+            "page": c.get("page_number"),
             "excerpt": c["content"][:300] + "..." if len(c["content"]) > 300 else c["content"],
             "document_id": c["document_id"],
             "chunk_id": c["chunk_id"],
         }
-        for c in chunks
+        for idx, c in enumerate(chunks)
     ]
     yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
 
@@ -135,8 +136,15 @@ async def _rag_stream_generator(
             full_response += token
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
     except Exception as e:
-        logger.error(f"Chat completion streaming failed: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Response generation failed. Please try again.'})}\n\n"
+        logger.error(f"Chat completion streaming failed: {e}", exc_info=True)
+        error_detail = str(e)
+        if "model" in error_detail.lower() or "deployment" in error_detail.lower():
+            error_msg = f"Model configuration error: {error_detail}"
+        elif "auth" in error_detail.lower() or "401" in error_detail:
+            error_msg = "Authentication error. Please check your Azure OpenAI credentials."
+        else:
+            error_msg = f"Response generation failed: {error_detail}"
+        yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
         yield "data: [DONE]\n\n"
         return
 
@@ -196,11 +204,13 @@ async def _rag_stream_generator(
     yield "data: [DONE]\n\n"
 
 
-@router.post("/stream")
+@router.get("/stream")
 async def chat_stream(
-    body: ChatRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
+    message: str,
+    session_id: str,
+    token: Optional[str] = None,
+    request: Request = None,
+    current_user: User = Depends(get_current_user_from_query),
 ):
     """
     Stream a RAG chat response using Server-Sent Events (SSE).
@@ -212,10 +222,11 @@ async def chat_stream(
       - replace: Replace buffered content (content safety violation on output)
       - done: Completion with total token count
     """
+    logger.info(f"Chat stream request from user: {current_user.username}, message: {message[:50]}...")
     return StreamingResponse(
         _rag_stream_generator(
-            query=body.message,
-            session_id=body.session_id,
+            query=message,
+            session_id=session_id,
             current_user=current_user,
             request=request,
         ),
