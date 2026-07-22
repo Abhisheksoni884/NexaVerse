@@ -1,4 +1,8 @@
-version: "3.9"
+# ── NOTE ───────────────────────────────────────────────────────────────────────
+# Before building, ensure frontend is built to backend/static:
+#   cd frontend && npm run build
+# This bundles React assets into backend/static/ which are served by FastAPI
+# ───────────────────────────────────────────────────────────────────────────────
 
 services:
   # ── Backend: FastAPI ──────────────────────────────────────────────────────────
@@ -20,25 +24,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-
-  # ── Frontend: React + Nginx ───────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: nexaverse-frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 networks:
   default:
