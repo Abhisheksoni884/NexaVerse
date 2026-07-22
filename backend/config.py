@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     top_k_search_results: int = Field(5, alias="TOP_K_SEARCH_RESULTS")
     max_chunk_tokens: int = Field(500, alias="MAX_CHUNK_TOKENS")
     chunk_overlap_tokens: int = Field(50, alias="CHUNK_OVERLAP_TOKENS")
+    llm_max_completion_tokens: int = Field(2048, alias="LLM_MAX_COMPLETION_TOKENS")
+    llm_request_timeout_seconds: int = Field(30, alias="LLM_REQUEST_TIMEOUT_SECONDS")
+    rag_chunk_preview_chars: int = Field(500, alias="RAG_CHUNK_PREVIEW_CHARS")
 
     @property
     def cors_origins_list(self) -> list[str]:
