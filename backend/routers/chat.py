@@ -213,16 +213,30 @@ async def _rag_stream_generator(
         slog.info("✓ LLM RESPONSE CACHE HIT — returning cached response in <100ms")
         slog.debug(f"Cache key: {cache_key[:16]}... | Cached response: {len(full_response)} chars")
         
-        # Stream the cached response in a way that mimics LLM token streaming
-        # Break response into natural chunks (sentences/phrases) for smooth streaming
+        # Stream the cached response with markdown-aware chunking to preserve formatting
         yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
         
-        # Stream in chunks to simulate real-time LLM streaming
-        # Process response in 50-character chunks to feel natural
-        chunk_size = 50
-        for i in range(0, len(full_response), chunk_size):
-            chunk = full_response[i:i + chunk_size]
-            yield "data: " + json.dumps({"type": "token", "content": chunk}) + "\n\n"
+        # Stream the response in sentence/markdown-aware chunks (not word-split)
+        # This preserves formatting like headings, bullets, bold, etc.
+        i = 0
+        chunk_size = 100  # Larger chunks to preserve markdown structure
+        
+        while i < len(full_response):
+            # Find a good break point
+            end = min(i + chunk_size, len(full_response))
+            
+            # If not at end, try to break at a natural boundary
+            if end < len(full_response):
+                # Look back for good break points: period, newline, or markdown boundary
+                for j in range(end, max(i, end - 50), -1):
+                    if full_response[j] in '.:\n':
+                        end = j + 1
+                        break
+            
+            chunk = full_response[i:end]
+            if chunk.strip():  # Only yield non-empty chunks
+                yield "data: " + json.dumps({"type": "token", "content": chunk}) + "\n\n"
+            i = end
         
         slog.info(f"Cached response streamed — approx {len(full_response)//4} tokens (FROM CACHE)")
     else:
