@@ -43,7 +43,6 @@ from models.audit import AuditLog, AuditAction, TokenUsageRecord
 from services.openai_service import (
     generate_embedding,
     build_rag_prompt,
-    get_chat_completion_with_usage,
     stream_chat_completion,
 )
 from services.search_service import hybrid_search

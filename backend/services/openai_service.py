@@ -14,7 +14,6 @@ import hashlib
 import time
 from collections import OrderedDict
 from typing import List, AsyncGenerator, Optional
-import json
 
 from openai import AsyncAzureOpenAI
 
@@ -209,7 +208,8 @@ async def stream_chat_completion(
         model=settings.azure_openai_chat_deployment,
         messages=full_messages,
         stream=True,
-        max_completion_tokens=4096,  # gpt-5-mini: use max_completion_tokens (reasoning model)
+        max_completion_tokens=settings.llm_max_completion_tokens,
+        timeout=float(settings.llm_request_timeout_seconds),
     )
 
     async for chunk in stream:
@@ -217,30 +217,3 @@ async def stream_chat_completion(
         if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
-
-async def get_chat_completion_with_usage(
-    messages: List[dict],
-    history: List[dict],
-    query: str,
-) -> dict:
-    """
-    Non-streaming chat completion — returns full response + token usage.
-    Used for cases where streaming is not needed (e.g., content safety check on output).
-    """
-    client = get_openai_client()
-    full_messages = messages + history + [{"role": "user", "content": query}]
-
-    response = await client.chat.completions.create(
-        model=settings.azure_openai_chat_deployment,
-        messages=full_messages,
-        stream=False,
-        # NOTE: temperature is NOT supported for GPT-5 (reasoning models) — omitted intentionally
-        max_completion_tokens=16384,  # GPT-5: use max_completion_tokens, not max_tokens
-    )
-
-    return {
-        "content": response.choices[0].message.content,
-        "prompt_tokens": response.usage.prompt_tokens,
-        "completion_tokens": response.usage.completion_tokens,
-        "total_tokens": response.usage.total_tokens,
-    }
