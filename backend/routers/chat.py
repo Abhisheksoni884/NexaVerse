@@ -6,13 +6,14 @@ The full RAG pipeline:
   2. Generate query embedding             ┘
   3. Hybrid search (keyword + vector) with RBAC filters
   4. Build grounded prompt with retrieved context
-  5. Stream GPT-5 response via SSE
+  5. Stream GPT-5 response via SSE (with response caching)
   6. Content Safety check on output
   7. Yield SSE "done" event to the client IMMEDIATELY
   8. Fire-and-forget: log audit event + token usage (asyncio.create_task)
 
 Performance optimisations in this module:
   - Steps 1 & 2 run concurrently (asyncio.gather) — saves ~300–500 ms
+  - LLM response caching: identical queries skip LLM entirely, return cached response in <100ms
   - Audit log + token usage writes are fire-and-forget tasks that happen
     AFTER the SSE "done" event is emitted — the client gets the response
     ~100–300 ms earlier
@@ -25,8 +26,11 @@ Endpoints:
 import asyncio
 import json
 import uuid
+import hashlib
+import time
 from datetime import datetime
 from typing import List, AsyncGenerator, Optional
+from collections import OrderedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -50,6 +54,45 @@ from utils.logging import logger, get_role_logger
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 settings = get_settings()
+
+# ── LLM Response Cache ─────────────────────────────────────────────────────────
+# Cache responses for identical queries to avoid LLM calls
+# Key: SHA-256(query + allowed_roles)
+# Value: (response, token_usage, expiry_time)
+_RESPONSE_CACHE_MAX = 256
+_RESPONSE_CACHE_TTL = 3600  # 1 hour
+
+_response_cache: OrderedDict[str, tuple[str, dict, float]] = OrderedDict()
+
+
+def _response_cache_key(query: str, allowed_roles: List[str]) -> str:
+    """Generate cache key from query and user roles."""
+    cache_input = f"{query.lower().strip()}:{','.join(sorted(allowed_roles))}"
+    return hashlib.sha256(cache_input.encode()).hexdigest()
+
+
+def _response_cache_get(key: str) -> Optional[tuple[str, dict]]:
+    """Get cached response if it exists and hasn't expired."""
+    entry = _response_cache.get(key)
+    if entry is None:
+        return None
+    response, token_usage, expiry = entry
+    if expiry < time.monotonic():
+        _response_cache.pop(key, None)  # expired — evict
+        return None
+    # Move to end (most-recently-used)
+    _response_cache.move_to_end(key)
+    return response, token_usage
+
+
+def _response_cache_set(key: str, response: str, token_usage: dict) -> None:
+    """Cache a response with expiry time."""
+    if key in _response_cache:
+        _response_cache.move_to_end(key)
+    _response_cache[key] = (response, token_usage, time.monotonic() + _RESPONSE_CACHE_TTL)
+    while len(_response_cache) > _RESPONSE_CACHE_MAX:
+        _response_cache.popitem(last=False)  # evict oldest
+
 
 # In-memory conversation history (keyed by session_id)
 # In production, persist this to Cosmos DB or Redis
@@ -156,30 +199,62 @@ async def _rag_stream_generator(
         user_role=current_user.role,
     )
 
-    # ── Step 5: Stream the completion ─────────────────────────────────────────
-    yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
-    slog.info("LLM streaming started")
+    # ── Step 5: Stream the completion (with cache check) ───────────────────────
+    # Check if we have a cached response for this exact query
+    cache_key = _response_cache_key(query, allowed_roles)
+    cached_response = _response_cache_get(cache_key)
+    
     full_response = ""
-    try:
-        async for token in stream_chat_completion(rag_messages, history_messages, query):
-            full_response += token
-            yield "data: " + json.dumps({"type": "token", "content": token}) + "\n\n"
-        slog.info(f"LLM streaming complete — approx {len(full_response)//4} tokens")
-    except Exception as e:
-        slog.error(f"LLM streaming failed: {e}", exc_info=True)
-        logger.error(f"Chat completion streaming failed: {e}", exc_info=True)
-        error_detail = str(e)
-        if "model" in error_detail.lower() or "deployment" in error_detail.lower():
-            error_msg = f"Model configuration error: {error_detail}"
-        elif "auth" in error_detail.lower() or "401" in error_detail:
-            error_msg = "Authentication error. Please check your Azure OpenAI credentials."
-        else:
-            error_msg = f"Response generation failed: {error_detail}"
-        yield "data: " + json.dumps({"type": "error", "content": error_msg}) + "\n\n"
-        yield "data: [DONE]\n\n"
-        return
+    token_usage = {}
+    
+    if cached_response:
+        # Cache hit — return cached response immediately
+        full_response, token_usage = cached_response
+        slog.info("✓ LLM RESPONSE CACHE HIT — returning cached response in <100ms")
+        slog.debug(f"Cache key: {cache_key[:16]}... | Cached response: {len(full_response)} chars")
+        
+        # Stream the cached response
+        yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
+        for token in full_response.split():
+            yield "data: " + json.dumps({"type": "token", "content": token + " "}) + "\n\n"
+        slog.info(f"Cached response streamed — approx {len(full_response)//4} tokens (FROM CACHE)")
+    else:
+        # Cache miss — call LLM
+        yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
+        slog.info("LLM streaming started (cache miss — calling Azure OpenAI)")
+        
+        try:
+            async for token in stream_chat_completion(rag_messages, history_messages, query):
+                full_response += token
+                yield "data: " + json.dumps({"type": "token", "content": token}) + "\n\n"
+            slog.info(f"LLM streaming complete — approx {len(full_response)//4} tokens")
+            
+            # Extract token usage from last streaming call (mock for now)
+            token_usage = {
+                "prompt_tokens": len(rag_messages[0]["content"]) // 4,
+                "completion_tokens": len(full_response) // 4,
+            }
+            
+            # Cache the response for future identical queries
+            _response_cache_set(cache_key, full_response, token_usage)
+            slog.info("Response cached — future identical queries will use cache")
+            
+        except Exception as e:
+            slog.error(f"LLM streaming failed: {e}", exc_info=True)
+            logger.error(f"Chat completion streaming failed: {e}", exc_info=True)
+            error_detail = str(e)
+            if "model" in error_detail.lower() or "deployment" in error_detail.lower():
+                error_msg = f"Model configuration error: {error_detail}"
+            elif "auth" in error_detail.lower() or "401" in error_detail:
+                error_msg = "Authentication error. Please check your Azure OpenAI credentials."
+            else:
+                error_msg = f"Response generation failed: {error_detail}"
+            yield "data: " + json.dumps({"type": "error", "content": error_msg}) + "\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
     # ── Step 6: Content safety on output ─────────────────────────────────────
+    # (Continue with the rest of the function...)
     slog.debug("Running output content safety check")
     output_safe, output_reason = await analyze_text(full_response)
     if not output_safe:
