@@ -60,17 +60,17 @@ export function Login() {
           </p>
         </div>
 
-        {/* Stat mini-cards */}
+        {/* Feature mini-cards */}
         <div className="grid grid-cols-2 gap-3 mt-8">
           {[
-            { label: 'Documents', value: '2.4K', color: 'bg-brand-blue', text: 'text-white' },
-            { label: 'Queries/day', value: '1.8K', color: 'bg-brand-teal', text: 'text-white' },
-            { label: 'Users', value: '45', color: 'bg-brand-coral', text: 'text-white' },
-            { label: 'Uptime', value: '99.9%', color: 'bg-brand-lime', text: 'text-brand-dark' },
+            { label: 'Search', value: 'AI-Powered', color: 'bg-brand-blue', text: 'text-white' },
+            { label: 'Access', value: 'Role-Based', color: 'bg-brand-teal', text: 'text-white' },
+            { label: 'Security', value: 'Enterprise', color: 'bg-brand-coral', text: 'text-white' },
+            { label: 'Tracking', value: 'Audit Logs', color: 'bg-brand-lime', text: 'text-brand-dark' },
           ].map(s => (
             <div key={s.label} className={cn("rounded-xl p-4 flex flex-col gap-1", s.color)}>
               <p className={cn("text-xs font-semibold opacity-75", s.text)}>{s.label}</p>
-              <p className={cn("text-2xl font-extrabold tracking-tight", s.text)}>{s.value}</p>
+              <p className={cn("text-lg font-extrabold tracking-tight", s.text)}>{s.value}</p>
             </div>
           ))}
         </div>
