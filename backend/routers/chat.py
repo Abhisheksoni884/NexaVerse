@@ -213,10 +213,17 @@ async def _rag_stream_generator(
         slog.info("✓ LLM RESPONSE CACHE HIT — returning cached response in <100ms")
         slog.debug(f"Cache key: {cache_key[:16]}... | Cached response: {len(full_response)} chars")
         
-        # Stream the cached response
+        # Stream the cached response in a way that mimics LLM token streaming
+        # Break response into natural chunks (sentences/phrases) for smooth streaming
         yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
-        for token in full_response.split():
-            yield "data: " + json.dumps({"type": "token", "content": token + " "}) + "\n\n"
+        
+        # Stream in chunks to simulate real-time LLM streaming
+        # Process response in 50-character chunks to feel natural
+        chunk_size = 50
+        for i in range(0, len(full_response), chunk_size):
+            chunk = full_response[i:i + chunk_size]
+            yield "data: " + json.dumps({"type": "token", "content": chunk}) + "\n\n"
+        
         slog.info(f"Cached response streamed — approx {len(full_response)//4} tokens (FROM CACHE)")
     else:
         # Cache miss — call LLM
