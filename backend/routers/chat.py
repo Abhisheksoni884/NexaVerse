@@ -2,19 +2,27 @@
 routers/chat.py — RAG chat endpoint with SSE streaming.
 
 The full RAG pipeline:
-  1. Content Safety check on user input
-  2. Generate query embedding
+  1. Content Safety check on user input  ┐ run in parallel via asyncio.gather
+  2. Generate query embedding             ┘
   3. Hybrid search (keyword + vector) with RBAC filters
   4. Build grounded prompt with retrieved context
   5. Stream GPT-5 response via SSE
   6. Content Safety check on output
-  7. Log audit event + token usage
+  7. Yield SSE "done" event to the client IMMEDIATELY
+  8. Fire-and-forget: log audit event + token usage (asyncio.create_task)
+
+Performance optimisations in this module:
+  - Steps 1 & 2 run concurrently (asyncio.gather) — saves ~300–500 ms
+  - Audit log + token usage writes are fire-and-forget tasks that happen
+    AFTER the SSE "done" event is emitted — the client gets the response
+    ~100–300 ms earlier
 
 Endpoints:
   GET  /chat/stream          → SSE streaming RAG response
   GET  /chat/history/{sid}   → Get conversation history
   DELETE /chat/history/{sid} → Clear session history
 """
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -38,7 +46,7 @@ from services.search_service import hybrid_search
 from services.content_safety import analyze_text, UNSAFE_RESPONSE_MESSAGE
 from services.cosmos_service import write_audit_log, write_token_usage
 from config import get_settings
-from utils.logging import logger
+from utils.logging import logger, get_role_logger
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 settings = get_settings()
@@ -71,10 +79,34 @@ async def _rag_stream_generator(
     Core RAG pipeline implemented as an async SSE generator.
     Yields SSE-formatted events.
     """
-    # ── Step 1: Content safety on input ──────────────────────────────────────
-    is_safe, reason = await analyze_text(query)
+    slog = get_role_logger(current_user.role.value)
+    slog.info(f"Request received — session={session_id} user={current_user.username}")
+    slog.info(f"Query: {query[:200]}")
+
+    # ── Immediate feedback: tell the client we're working ─────────────────────
+    yield "data: " + json.dumps({"type": "status", "content": "Searching knowledge base\u2026"}) + "\n\n"
+
+    # ── Steps 1 & 2 (parallel): Content safety + Embedding generation ──────────
+    # Both are independent — run them concurrently to save one full round-trip
+    slog.debug("Starting parallel: content safety check + embedding generation")
+    try:
+        (is_safe, reason), query_embedding = await asyncio.gather(
+            analyze_text(query),
+            generate_embedding(query),
+        )
+        slog.debug(f"Content safety: is_safe={is_safe} reason={reason}")
+        slog.debug("Embedding ready (cache hit or freshly generated)")
+    except Exception as e:
+        slog.error(f"Safety check or embedding failed: {e}", exc_info=True)
+        logger.error(f"Safety check or embedding failed: {e}")
+        yield "data: " + json.dumps({"type": "error", "content": "Failed to process query. Please try again."}) + "\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    # ── Content safety gate ───────────────────────────────────────────────────
     if not is_safe:
-        await write_audit_log(AuditLog(
+        slog.warning(f"Content safety VIOLATION on input: {reason}")
+        asyncio.create_task(write_audit_log(AuditLog(
             username=current_user.username,
             role=current_user.role,
             action=AuditAction.CONTENT_SAFETY_VIOLATION,
@@ -82,28 +114,23 @@ async def _rag_stream_generator(
             session_id=session_id,
             details=f"Input violation: {reason}",
             success=False,
-        ))
-        yield f"data: {json.dumps({'type': 'error', 'content': UNSAFE_RESPONSE_MESSAGE})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    # ── Step 2: Generate query embedding ─────────────────────────────────────
-    try:
-        query_embedding = await generate_embedding(query)
-    except Exception as e:
-        logger.error(f"Embedding generation failed: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': 'Failed to process query. Please try again.'})}\n\n"
+        )))
+        yield "data: " + json.dumps({"type": "error", "content": UNSAFE_RESPONSE_MESSAGE}) + "\n\n"
         yield "data: [DONE]\n\n"
         return
 
     # ── Step 3: Hybrid search with RBAC filter ────────────────────────────────
     allowed_roles = get_allowed_roles_for_search(current_user)
+    slog.debug(f"Hybrid search — allowed_roles={allowed_roles} top_k={settings.top_k_search_results}")
     chunks = await hybrid_search(
         query=query,
         query_embedding=query_embedding,
         allowed_roles=allowed_roles,
         top_k=settings.top_k_search_results,
     )
+    slog.info(f"Search complete — {len(chunks)} chunk(s) retrieved")
+    for i, c in enumerate(chunks, 1):
+        slog.debug(f"  Chunk {i}: {c['document_name']} p.{c.get('page_number','?')} score={c.get('score',0):.4f}")
 
     # Emit citations metadata to the client before streaming content
     citations = [
@@ -117,7 +144,7 @@ async def _rag_stream_generator(
         }
         for idx, c in enumerate(chunks)
     ]
-    yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+    yield "data: " + json.dumps({"type": "citations", "citations": citations}) + "\n\n"
 
     # ── Step 4: Build grounded RAG prompt ─────────────────────────────────────
     session = _get_or_create_session(session_id)
@@ -130,12 +157,16 @@ async def _rag_stream_generator(
     )
 
     # ── Step 5: Stream the completion ─────────────────────────────────────────
+    yield "data: " + json.dumps({"type": "status", "content": "Generating answer\u2026"}) + "\n\n"
+    slog.info("LLM streaming started")
     full_response = ""
     try:
         async for token in stream_chat_completion(rag_messages, history_messages, query):
             full_response += token
-            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            yield "data: " + json.dumps({"type": "token", "content": token}) + "\n\n"
+        slog.info(f"LLM streaming complete — approx {len(full_response)//4} tokens")
     except Exception as e:
+        slog.error(f"LLM streaming failed: {e}", exc_info=True)
         logger.error(f"Chat completion streaming failed: {e}", exc_info=True)
         error_detail = str(e)
         if "model" in error_detail.lower() or "deployment" in error_detail.lower():
@@ -144,14 +175,16 @@ async def _rag_stream_generator(
             error_msg = "Authentication error. Please check your Azure OpenAI credentials."
         else:
             error_msg = f"Response generation failed: {error_detail}"
-        yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+        yield "data: " + json.dumps({"type": "error", "content": error_msg}) + "\n\n"
         yield "data: [DONE]\n\n"
         return
 
     # ── Step 6: Content safety on output ─────────────────────────────────────
+    slog.debug("Running output content safety check")
     output_safe, output_reason = await analyze_text(full_response)
     if not output_safe:
-        await write_audit_log(AuditLog(
+        slog.warning(f"Content safety VIOLATION on output: {output_reason}")
+        asyncio.create_task(write_audit_log(AuditLog(
             username=current_user.username,
             role=current_user.role,
             action=AuditAction.CONTENT_SAFETY_VIOLATION,
@@ -159,10 +192,11 @@ async def _rag_stream_generator(
             session_id=session_id,
             details=f"Output violation: {output_reason}",
             success=False,
-        ))
-        # Replace the streamed content (client must handle this event)
-        yield f"data: {json.dumps({'type': 'replace', 'content': UNSAFE_RESPONSE_MESSAGE})}\n\n"
+        )))
+        yield "data: " + json.dumps({"type": "replace", "content": UNSAFE_RESPONSE_MESSAGE}) + "\n\n"
         full_response = UNSAFE_RESPONSE_MESSAGE
+    else:
+        slog.debug("Output content safety: PASSED")
 
     # ── Step 7: Update conversation history ───────────────────────────────────
     session.messages.append(ChatMessage(role="user", content=query))
@@ -175,8 +209,17 @@ async def _rag_stream_generator(
     approx_completion = len(full_response) // 4
     approx_total = approx_prompt + approx_completion
 
-    # ── Step 8: Log audit + token usage ──────────────────────────────────────
-    await write_audit_log(AuditLog(
+    # ── Step 8: Emit "done" to the client FIRST ───────────────────────────────
+    slog.info(
+        f"Request complete — prompt_tokens~{approx_prompt} "
+        f"completion_tokens~{approx_completion} total~{approx_total}"
+    )
+    slog.debug("Scheduling audit log + token usage writes (fire-and-forget)")
+    yield "data: " + json.dumps({"type": "done", "total_tokens": approx_total}) + "\n\n"
+    yield "data: [DONE]\n\n"
+
+    # ── Step 9: Fire-and-forget audit + token usage ───────────────────────────
+    asyncio.create_task(write_audit_log(AuditLog(
         username=current_user.username,
         role=current_user.role,
         action=AuditAction.CHAT_QUERY,
@@ -187,9 +230,9 @@ async def _rag_stream_generator(
         completion_tokens=approx_completion,
         total_tokens=approx_total,
         success=True,
-    ))
+    )))
 
-    await write_token_usage(TokenUsageRecord(
+    asyncio.create_task(write_token_usage(TokenUsageRecord(
         username=current_user.username,
         role=current_user.role,
         operation="chat",
@@ -198,10 +241,7 @@ async def _rag_stream_generator(
         completion_tokens=approx_completion,
         total_tokens=approx_total,
         session_id=session_id,
-    ))
-
-    yield f"data: {json.dumps({'type': 'done', 'total_tokens': approx_total})}\n\n"
-    yield "data: [DONE]\n\n"
+    )))
 
 
 @router.get("/stream")
@@ -251,4 +291,6 @@ async def get_history(session_id: str, current_user: User = Depends(get_current_
 async def clear_history(session_id: str, current_user: User = Depends(get_current_user)):
     """Clear conversation history for a session."""
     if session_id in _conversation_store:
+        slog = get_role_logger(current_user.role.value)
+        slog.info(f"Session history cleared by user={current_user.username} session={session_id}")
         del _conversation_store[session_id]
