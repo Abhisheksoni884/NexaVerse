@@ -22,22 +22,30 @@ export function Chat() {
   }]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [statusText, setStatusText] = useState('');
   const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
   const [error, setError] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionId = useRef<string>(`session-${Date.now()}`);
+  // Token batching: accumulate tokens in a ref and flush to state via RAF
+  // so we don't trigger a React re-render on every single streaming token.
+  const pendingTokens = useRef<string>('');
+  const rafHandle = useRef<number | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   useEffect(() => {
-    // Cleanup EventSource on unmount
+    // Cleanup EventSource and any pending RAF on unmount
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+      }
+      if (rafHandle.current !== null) {
+        cancelAnimationFrame(rafHandle.current);
       }
     };
   }, []);
@@ -62,6 +70,13 @@ export function Chat() {
     };
     setMessages(prev => [...prev, botMessage]);
 
+    // Cancel any leftover RAF from a previous stream
+    if (rafHandle.current !== null) {
+      cancelAnimationFrame(rafHandle.current);
+      rafHandle.current = null;
+    }
+    pendingTokens.current = '';
+
     try {
       // Close any existing connection
       if (eventSourceRef.current) {
@@ -81,14 +96,28 @@ export function Chat() {
           }));
           setMessages(prev => prev.map(m => m.id === botId ? { ...m, citations: botMessage.citations } : m));
         },
-        // onToken
+        // onToken — accumulate into buffer, flush on next animation frame
         (token) => {
           botMessage.content += token;
-          setMessages(prev => prev.map(m => m.id === botId ? { ...m, content: botMessage.content } : m));
+          pendingTokens.current += token;
+          // Clear status text once real content starts arriving
+          if (statusText) setStatusText('');
+
+          if (rafHandle.current === null) {
+            rafHandle.current = requestAnimationFrame(() => {
+              rafHandle.current = null;
+              if (pendingTokens.current) {
+                pendingTokens.current = '';
+                setMessages(prev =>
+                  prev.map(m => m.id === botId ? { ...m, content: botMessage.content } : m)
+                );
+              }
+            });
+          }
         },
         // onDone
-        (totalTokens) => {
-          console.log('Chat completed. Total tokens:', totalTokens);
+        (_totalTokens) => {
+          setStatusText('');
           setMessages(prev => prev.map(m => m.id === botId ? { ...m, isStreaming: false } : m));
           setIsStreaming(false);
           eventSourceRef.current = null;
@@ -96,6 +125,7 @@ export function Chat() {
         // onError
         (errorMsg) => {
           console.error('Chat error:', errorMsg);
+          setStatusText('');
           setError(errorMsg);
           setMessages(prev => prev.map(m => m.id === botId 
             ? { ...m, content: `Error: ${errorMsg}`, isStreaming: false } 
@@ -108,6 +138,10 @@ export function Chat() {
         (replacementContent) => {
           botMessage.content = replacementContent;
           setMessages(prev => prev.map(m => m.id === botId ? { ...m, content: replacementContent } : m));
+        },
+        // onStatus — pipeline progress messages
+        (status) => {
+          setStatusText(status);
         }
       );
     } catch (err: any) {
@@ -188,7 +222,18 @@ export function Chat() {
                   >
                     {msg.content}
                   </ReactMarkdown>
-                  {msg.isStreaming && (
+                  {/* Status placeholder: shown when streaming but no content yet */}
+                  {msg.isStreaming && !msg.content && statusText && (
+                    <span className="flex items-center gap-2 text-slate-400 text-xs italic">
+                      <span className="flex gap-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-teal animate-bounce [animation-delay:0ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-teal animate-bounce [animation-delay:150ms]" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand-teal animate-bounce [animation-delay:300ms]" />
+                      </span>
+                      {statusText}
+                    </span>
+                  )}
+                  {msg.isStreaming && msg.content && (
                     <span className="inline-block w-1.5 h-4 bg-brand-blue rounded-sm animate-pulse ml-1 align-middle" />
                   )}
                 </div>

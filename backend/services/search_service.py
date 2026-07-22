@@ -6,7 +6,12 @@ Handles:
   - Uploading document chunks (with embeddings)
   - Hybrid search (keyword + vector) with RBAC filtering
   - Chunk deletion when a document is removed
+
+Performance optimisations:
+  - Singleton SearchClient / SearchIndexClient — connection is reused across requests
+  - asyncio.to_thread wraps blocking SDK calls so the event loop is never stalled
 """
+import asyncio
 from typing import List, Optional
 
 from azure.search.documents import SearchClient
@@ -37,19 +42,30 @@ settings = get_settings()
 EMBEDDING_DIMENSIONS = 1536  # text-embedding-3-small dimensions
 
 
+# ── Singleton clients (created once, reused for all requests) ─────────────────
+_index_client: SearchIndexClient | None = None
+_search_client: SearchClient | None = None
+
+
 def _get_index_client() -> SearchIndexClient:
-    return SearchIndexClient(
-        endpoint=settings.azure_search_endpoint,
-        credential=AzureKeyCredential(settings.azure_search_api_key),
-    )
+    global _index_client
+    if _index_client is None:
+        _index_client = SearchIndexClient(
+            endpoint=settings.azure_search_endpoint,
+            credential=AzureKeyCredential(settings.azure_search_api_key),
+        )
+    return _index_client
 
 
 def _get_search_client() -> SearchClient:
-    return SearchClient(
-        endpoint=settings.azure_search_endpoint,
-        index_name=settings.azure_search_index_name,
-        credential=AzureKeyCredential(settings.azure_search_api_key),
-    )
+    global _search_client
+    if _search_client is None:
+        _search_client = SearchClient(
+            endpoint=settings.azure_search_endpoint,
+            index_name=settings.azure_search_index_name,
+            credential=AzureKeyCredential(settings.azure_search_api_key),
+        )
+    return _search_client
 
 
 def ensure_index_exists() -> None:
@@ -169,6 +185,9 @@ async def hybrid_search(
 
     The RBAC filter ensures users only see documents they are authorized to access.
     Uses Reciprocal Rank Fusion (RRF) to merge keyword and vector results.
+
+    The blocking search SDK call is offloaded to asyncio.to_thread so the
+    event loop is never stalled while waiting for Azure AI Search.
     """
     search_client = _get_search_client()
 
@@ -185,16 +204,20 @@ async def hybrid_search(
         fields="embedding",
     )
 
-    results = search_client.search(
-        search_text=query,
-        vector_queries=[vector_query],
-        filter=filter_expression,
-        select=["chunk_id", "document_id", "document_name", "content", "page_number", "section", "category"],
-        top=top_k,
-    )
+    def _do_search():
+        return list(search_client.search(
+            search_text=query,
+            vector_queries=[vector_query],
+            filter=filter_expression,
+            select=["chunk_id", "document_id", "document_name", "content", "page_number", "section", "category"],
+            top=top_k,
+        ))
+
+    # Offload blocking I/O to a thread so the event loop stays responsive
+    raw_results = await asyncio.to_thread(_do_search)
 
     chunks = []
-    for result in results:
+    for result in raw_results:
         chunks.append({
             "chunk_id": result["chunk_id"],
             "document_id": result["document_id"],

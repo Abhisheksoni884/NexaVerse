@@ -158,7 +158,8 @@ export const chatAPI = {
     onToken: (token: string) => void,
     onDone: (totalTokens: number) => void,
     onError: (error: string) => void,
-    onReplace?: (content: string) => void
+    onReplace?: (content: string) => void,
+    onStatus?: (status: string) => void
   ): EventSource => {
     const userStr = localStorage.getItem('user');
     let jwtToken = '';
@@ -187,7 +188,8 @@ export const chatAPI = {
       }
       try {
         const data = JSON.parse(e.data);
-        if (data.type === 'citations') onCitation(data.citations || []);
+        if (data.type === 'status') { onStatus?.(data.content || ''); }
+        else if (data.type === 'citations') onCitation(data.citations || []);
         else if (data.type === 'token') onToken(data.content || '');
         else if (data.type === 'done') { onDone(data.total_tokens || 0); eventSource.close(); }
         else if (data.type === 'error') { onError(data.content || 'An error occurred'); eventSource.close(); }

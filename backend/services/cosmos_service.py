@@ -5,7 +5,13 @@ Uses the synchronous SDK (cosmos SDK doesn't have full async support in all envi
 Two containers in one database:
   - audit-logs      : all application events
   - token-usage     : per-query token consumption
+
+Performance optimisation:
+  - All blocking SDK calls (upsert, delete, query, read) are wrapped with
+    asyncio.to_thread so they execute in a thread pool without stalling the
+    asyncio event loop.
 """
+import asyncio
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
@@ -87,12 +93,12 @@ def ensure_cosmos_containers() -> None:
 # ── Audit Logging ─────────────────────────────────────────────────────────────
 
 async def write_audit_log(log: AuditLog) -> None:
-    """Write a single audit event to Cosmos DB."""
+    """Write a single audit event to Cosmos DB (non-blocking)."""
     try:
         container = _get_audit_container()
         item = log.model_dump()
         item["timestamp"] = log.timestamp.isoformat()
-        container.upsert_item(item)
+        await asyncio.to_thread(container.upsert_item, item)
     except Exception as e:
         # Audit failures should never crash the application
         logger.error(f"Failed to write audit log: {e}")
@@ -137,11 +143,15 @@ async def query_audit_logs(
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"SELECT * FROM c {where_clause} ORDER BY c.timestamp DESC OFFSET {(page-1)*page_size} LIMIT {page_size}"
 
-        items = list(container.query_items(query=query, parameters=params, enable_cross_partition_query=True))
+        items = await asyncio.to_thread(
+            lambda: list(container.query_items(query=query, parameters=params, enable_cross_partition_query=True))
+        )
 
         # Get total count for pagination
         count_query = f"SELECT VALUE COUNT(1) FROM c {where_clause}"
-        count_result = list(container.query_items(query=count_query, parameters=params, enable_cross_partition_query=True))
+        count_result = await asyncio.to_thread(
+            lambda: list(container.query_items(query=count_query, parameters=params, enable_cross_partition_query=True))
+        )
         total = count_result[0] if count_result else 0
 
         return {
@@ -159,7 +169,7 @@ async def query_audit_logs(
 # ── Token Usage Tracking ──────────────────────────────────────────────────────
 
 async def write_token_usage(record: TokenUsageRecord) -> None:
-    """Write a token usage record to Cosmos DB."""
+    """Write a token usage record to Cosmos DB (non-blocking)."""
     try:
         container = _get_tokens_container()
         now = record.timestamp
@@ -169,7 +179,7 @@ async def write_token_usage(record: TokenUsageRecord) -> None:
         item["date_str"] = now.strftime("%Y-%m-%d")
         item["week_str"] = now.strftime("%Y-W%W")
         item["month_str"] = now.strftime("%Y-%m")
-        container.upsert_item(item)
+        await asyncio.to_thread(container.upsert_item, item)
     except Exception as e:
         logger.error(f"Failed to write token usage: {e}")
 
@@ -200,11 +210,13 @@ async def get_user_token_summary(username: str, period: str = "all-time") -> Dic
             FROM c
             WHERE c.username = @username {period_filter}
         """
-        results = list(container.query_items(
-            query=query,
-            parameters=[{"name": "@username", "value": username}],
-            partition_key=username,
-        ))
+        results = await asyncio.to_thread(
+            lambda: list(container.query_items(
+                query=query,
+                parameters=[{"name": "@username", "value": username}],
+                partition_key=username,
+            ))
+        )
 
         if results and results[0].get("total_tokens") is not None:
             r = results[0]
@@ -236,7 +248,9 @@ async def get_all_users_token_summary() -> List[Dict[str, Any]]:
                 c.completion_tokens
             FROM c
         """
-        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+        items = await asyncio.to_thread(
+            lambda: list(container.query_items(query=query, enable_cross_partition_query=True))
+        )
         
         # Group in python since Cosmos SDK doesn't support multiple aggregates in cross-partition query
         summary_map: Dict[str, Dict[str, Any]] = {}
@@ -280,11 +294,13 @@ async def get_recent_queries(username: str, limit: int = 10) -> List[Dict[str, A
             ORDER BY c.timestamp DESC
             OFFSET 0 LIMIT {limit}
         """
-        results = list(container.query_items(
-            query=query,
-            parameters=[{"name": "@username", "value": username}],
-            enable_cross_partition_query=True,
-        ))
+        results = await asyncio.to_thread(
+            lambda: list(container.query_items(
+                query=query,
+                parameters=[{"name": "@username", "value": username}],
+                enable_cross_partition_query=True,
+            ))
+        )
         return results
     except Exception as e:
         logger.error(f"Failed to get recent queries: {e}")
@@ -298,14 +314,14 @@ async def save_document_metadata(doc: DocumentMetadata) -> None:
         item = doc.model_dump()
         item["created_at"] = doc.created_at.isoformat()
         item["updated_at"] = doc.updated_at.isoformat()
-        container.upsert_item(item)
+        await asyncio.to_thread(container.upsert_item, item)
     except Exception as e:
         logger.error(f"Failed to save document metadata: {e}")
 
 async def get_document_metadata(doc_id: str) -> Optional[DocumentMetadata]:
     try:
         container = _get_documents_container()
-        response = container.read_item(item=doc_id, partition_key=doc_id)
+        response = await asyncio.to_thread(container.read_item, doc_id, doc_id)
         return DocumentMetadata(**response)
     except exceptions.CosmosResourceNotFoundError:
         return None
@@ -316,7 +332,9 @@ async def get_document_metadata(doc_id: str) -> Optional[DocumentMetadata]:
 async def get_all_documents_metadata() -> List[DocumentMetadata]:
     try:
         container = _get_documents_container()
-        items = list(container.query_items(query="SELECT * FROM c", enable_cross_partition_query=True))
+        items = await asyncio.to_thread(
+            lambda: list(container.query_items(query="SELECT * FROM c", enable_cross_partition_query=True))
+        )
         return [DocumentMetadata(**item) for item in items]
     except Exception as e:
         logger.error(f"Failed to list documents metadata: {e}")
@@ -325,7 +343,7 @@ async def get_all_documents_metadata() -> List[DocumentMetadata]:
 async def delete_document_metadata(doc_id: str) -> None:
     try:
         container = _get_documents_container()
-        container.delete_item(item=doc_id, partition_key=doc_id)
+        await asyncio.to_thread(container.delete_item, doc_id, doc_id)
     except exceptions.CosmosResourceNotFoundError:
         pass
     except Exception as e:
