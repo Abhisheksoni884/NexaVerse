@@ -121,7 +121,7 @@ async def _rag_stream_generator(
     Core RAG pipeline implemented as an async SSE generator.
     Yields SSE-formatted events.
     """
-    slog = get_role_logger(current_user.role.value)
+    slog = get_role_logger(current_user.role.value, session_id)
     slog.info(f"Request received — session={session_id} user={current_user.username}")
     slog.info(f"Query: {query[:200]}")
 
@@ -387,6 +387,6 @@ async def get_history(session_id: str, current_user: User = Depends(get_current_
 async def clear_history(session_id: str, current_user: User = Depends(get_current_user)):
     """Clear conversation history for a session."""
     if session_id in _conversation_store:
-        slog = get_role_logger(current_user.role.value)
+        slog = get_role_logger(current_user.role.value, session_id)
         slog.info(f"Session history cleared by user={current_user.username} session={session_id}")
         del _conversation_store[session_id]

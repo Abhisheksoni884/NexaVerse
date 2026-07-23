@@ -9,12 +9,16 @@ const api: AxiosInstance = axios.create({
   withCredentials: true,  // Automatically include cookies in requests
 });
 
-// Auto-redirect to login on 401
+// Auto-redirect to login on 401 (but NOT for /auth/me - let the provider handle it)
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      window.location.href = '/login';
+      // Only redirect if NOT the auth/me endpoint
+      // auth/me is used for initial validation - let AuthProvider handle 401
+      if (!error.config?.url?.includes('/auth/me')) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -40,9 +44,14 @@ export interface UserProfile {
 }
 
 export const authAPI = {
-  login: async (credentials: LoginRequest): Promise<LoginResponse> => {
+  login: async (credentials: LoginRequest): Promise<LoginResponse & { sessionId?: string }> => {
     const response = await api.post('/auth/login', credentials);
-    return response.data;
+    // Extract session ID from response headers if available
+    const sessionId = response.headers['x-session-id'];
+    return {
+      ...response.data,
+      sessionId: sessionId,
+    };
   },
 
   logout: async (): Promise<void> => {
@@ -152,7 +161,7 @@ export const chatAPI = {
   ): EventSource => {
     const params = new URLSearchParams();
     params.append('message', request.message);
-    params.append('session_id', request.session_id || `session-${Date.now()}`);
+    params.append('session_id', request.session_id || '');
     if (request.allowed_categories) {
       request.allowed_categories.forEach(cat => params.append('allowed_categories', cat));
     }

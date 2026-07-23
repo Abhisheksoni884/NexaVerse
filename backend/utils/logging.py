@@ -21,9 +21,12 @@ import json
 import sys
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+# India Standard Time (IST) is UTC+5:30
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 # Resolve to backend/logs/ regardless of where uvicorn is launched from
@@ -38,7 +41,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(IST).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -68,7 +71,7 @@ class SessionFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
-        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         level = self.LEVEL_COLORS.get(record.levelname, record.levelname)
         msg = record.getMessage()
         line = f"[{ts}] {level} | {msg}"
@@ -96,40 +99,51 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
 logger = setup_logging()
 
 
-# ── Per-role file logger ───────────────────────────────────────────────────────
+# ── Per-role session file logger ───────────────────────────────────────────────
 
-_role_loggers: dict[str, logging.Logger] = {}
+_role_session_loggers: dict[str, logging.Logger] = {}
 _role_lock = threading.Lock()
 
 
-def get_role_logger(role: str) -> logging.Logger:
+def get_role_logger(role: str, session_id: str = "") -> logging.Logger:
     """
     Return (or create) a logger that writes to:
-      logs/<YYYY-MM-DD>/<role>.log
+      logs/<YYYY-MM-DD>/<role>_HHMM.log
+    
+    Example: logs/2026-07-23/admin_1530.log (IST time)
 
-    The file is created the first time this function is called for a given
-    role. Subsequent calls return the same logger instance.
+    The filename uses the current time (HHMM format in IST) when the logger is created.
+    This happens when the user logs in, so it represents the login time in Indian Standard Time.
+    Format: HHMM (24-hour IST) for Windows filename compatibility (colons not allowed).
 
-    Log rotation: each role file caps at 5 MB (keeps 1 backup).
-    A new date folder is created automatically at midnight.
+    Log rotation: each session file caps at 5 MB (keeps 1 backup).
+    A new date folder is created automatically at midnight IST.
     """
-    with _role_lock:
-        if role in _role_loggers:
-            return _role_loggers[role]
+    # Create a unique key combining role and session_id
+    logger_key = f"{role}:{session_id}" if session_id else role
 
-        # Build  logs/2026-07-22/<role>.log
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    with _role_lock:
+        if logger_key in _role_session_loggers:
+            return _role_session_loggers[logger_key]
+
+        # Build logs/2026-07-23/<role>_HHMM.log using IST
+        date_str = datetime.now(IST).strftime("%Y-%m-%d")
+        time_str = datetime.now(IST).strftime("%H%M")  # No colon for Windows compatibility
         date_dir = LOGS_ROOT / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
 
-        log_path = date_dir / f"{role}.log"
+        # Format filename as role_HHMM.log (e.g., admin_1530.log in IST)
+        log_filename = f"{role}_{time_str}.log"
+        logger_namespace = f"role.{role}.{session_id}" if session_id else f"role.{role}"
 
-        # Create a dedicated logger namespaced under "role.<role>"
-        role_logger = logging.getLogger(f"role.{role}")
-        role_logger.setLevel(logging.DEBUG)
-        role_logger.propagate = False  # Don't bubble up to root logger
+        log_path = date_dir / log_filename
 
-        if not role_logger.handlers:
+        # Create a dedicated logger namespaced
+        role_session_logger = logging.getLogger(logger_namespace)
+        role_session_logger.setLevel(logging.DEBUG)
+        role_session_logger.propagate = False  # Don't bubble up to root logger
+
+        if not role_session_logger.handlers:
             file_handler = RotatingFileHandler(
                 log_path,
                 maxBytes=5 * 1024 * 1024,  # 5 MB
@@ -137,14 +151,17 @@ def get_role_logger(role: str) -> logging.Logger:
                 encoding="utf-8",
             )
             file_handler.setFormatter(SessionFormatter())
-            role_logger.addHandler(file_handler)
+            role_session_logger.addHandler(file_handler)
 
             # Also mirror logs to stdout at DEBUG level
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(logging.DEBUG)
             console_handler.setFormatter(SessionFormatter())
-            role_logger.addHandler(console_handler)
+            role_session_logger.addHandler(console_handler)
 
-        _role_loggers[role] = role_logger
-        role_logger.info(f"Role log started — role={role}")
-        return role_logger
+        _role_session_loggers[logger_key] = role_session_logger
+        if session_id:
+            role_session_logger.info(f"Session log started — role={role} session={session_id}")
+        else:
+            role_session_logger.info(f"Role log started — role={role}")
+        return role_session_logger

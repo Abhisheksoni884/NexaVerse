@@ -60,6 +60,10 @@ async def login(request: Request, response: Response, credentials: LoginRequest)
         expires_delta=timedelta(minutes=settings.jwt_access_token_expire_minutes),
     )
 
+    # Generate simple session ID: session_<timestamp>
+    import time
+    session_id = f"session_{int(time.time() * 1000) % 1000000}"
+
     # Set JWT in HTTP-only cookie
     response.set_cookie(
         key=COOKIE_NAME,
@@ -78,18 +82,22 @@ async def login(request: Request, response: Response, credentials: LoginRequest)
         action=AuditAction.LOGIN,
         resource="auth",
         ip_address=request.client.host if request.client else None,
-        details="Successful login",
+        details=f"Successful login - Session: {session_id}",
         success=True,
     ))
 
-    logger.info(f"User '{user.username}' logged in successfully. JWT set as HTTP-only cookie.")
+    logger.info(f"User '{user.username}' logged in successfully. Session ID: {session_id}")
 
-    return Token(
-        access_token=access_token,  # Still return token for client-side use if needed
+    # Return session ID to frontend in response
+    token_response = Token(
+        access_token=access_token,
         role=user.role,
         username=user.username,
         full_name=user.full_name,
     )
+    # Store session_id as JSON in response for frontend to pick up
+    response.headers["X-Session-ID"] = session_id
+    return token_response
 
 
 @router.get("/me", response_model=User)

@@ -14,7 +14,7 @@ interface Message {
 }
 
 export function Chat() {
-  const { user } = useAuth();
+  const { user, sessionId } = useAuth();
   const [messages, setMessages] = useState<Message[]>([{
     id: '0',
     role: 'assistant',
@@ -28,11 +28,45 @@ export function Chat() {
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const sessionId = useRef<string>(`session-${Date.now()}`);
+  
+  // Use session ID from auth context
+  const sessionIdRef = useRef<string>(sessionId || '');
+  
+  // Update ref when sessionId changes
+  useEffect(() => {
+    if (sessionId) {
+      sessionIdRef.current = sessionId;
+    }
+  }, [sessionId]);
+  
   // Token batching: accumulate tokens in a ref and flush to state via RAF
   // so we don't trigger a React re-render on every single streaming token.
   const pendingTokens = useRef<string>('');
   const rafHandle = useRef<number | null>(null);
+
+  // Load chat history on component mount
+  useEffect(() => {
+    const loadChatHistory = async () => {
+      if (!sessionId) return;
+      try {
+        const history = await chatAPI.getHistory(sessionId);
+        if (history.messages && history.messages.length > 0) {
+          // Convert stored messages to display format
+          const loadedMessages: Message[] = history.messages.map((msg: any, idx: number) => ({
+            id: idx.toString(),
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content,
+          }));
+          setMessages(loadedMessages);
+        }
+      } catch (err) {
+        // If history fetch fails, continue with empty messages
+        console.error('Failed to load chat history:', err);
+      }
+    };
+
+    loadChatHistory();
+  }, [sessionId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -86,7 +120,7 @@ export function Chat() {
       eventSourceRef.current = chatAPI.streamChat(
         {
           message: userMsg.content,
-          session_id: sessionId.current,
+          session_id: sessionIdRef.current,
         },
         // onCitation
         (citations) => {
