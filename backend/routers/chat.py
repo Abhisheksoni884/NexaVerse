@@ -343,9 +343,8 @@ async def _rag_stream_generator(
 async def chat_stream(
     message: str,
     session_id: str,
-    token: Optional[str] = None,
     request: Request = None,
-    current_user: User = Depends(get_current_user_from_query),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Stream a RAG chat response using Server-Sent Events (SSE).
@@ -356,6 +355,8 @@ async def chat_stream(
       - error: An error occurred
       - replace: Replace buffered content (content safety violation on output)
       - done: Completion with total token count
+    
+    Authentication: JWT sent via HTTP-only cookie (automatic with browser requests)
     """
     logger.info(f"Chat stream request from user: {current_user.username}, message: {message[:50]}...")
     return StreamingResponse(
