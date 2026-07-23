@@ -7,13 +7,12 @@ export type Role = 'admin' | 'analyst' | 'viewer';
 export interface User {
   username: string;
   role: Role;
-  token: string;
 }
 
 interface AuthContextType {
   user: User | null;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
@@ -25,58 +24,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check local storage for existing token and validate it
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        setUser(parsedUser);
-        
-        // Optionally verify the token is still valid
-        authAPI.getProfile()
-          .then(profile => {
-            // Token is valid, update user with fresh profile data
-            const updatedUser = { ...parsedUser, username: profile.username, role: profile.role as Role };
-            setUser(updatedUser);
-            localStorage.setItem('user', JSON.stringify(updatedUser));
-          })
-          .catch(() => {
-            // Token expired or invalid
-            setUser(null);
-            localStorage.removeItem('user');
-          })
-          .finally(() => {
-            setIsLoading(false);
-          });
-      } catch (e) {
-        console.error('Failed to parse stored user', e);
-        localStorage.removeItem('user');
+    // Check if user is authenticated by fetching current profile
+    // The auth_token cookie is automatically sent by the browser
+    authAPI.getProfile()
+      .then(profile => {
+        setUser({
+          username: profile.username,
+          role: profile.role as Role,
+        });
+      })
+      .catch(() => {
+        // Not authenticated or token expired
+        setUser(null);
+      })
+      .finally(() => {
         setIsLoading(false);
-      }
-    } else {
-      setIsLoading(false);
-    }
+      });
   }, []);
 
   const login = async (username: string, password: string) => {
     try {
       const response = await authAPI.login({ username, password });
-      const newUser: User = {
+      // Auth cookie is automatically set by the server
+      // No need to store token in state
+      setUser({
         username: response.username,
         role: response.role as Role,
-        token: response.access_token,
-      };
-      setUser(newUser);
-      localStorage.setItem('user', JSON.stringify(newUser));
+      });
     } catch (error: any) {
       console.error('Login failed:', error);
       throw new Error(error.response?.data?.detail || 'Login failed. Please check your credentials.');
     }
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('user');
+  const logout = async () => {
+    try {
+      await authAPI.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setUser(null);
+    }
   };
 
   return (

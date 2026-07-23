@@ -1,12 +1,13 @@
 """
 routers/auth.py — Authentication endpoints.
 
-POST /auth/login  → returns JWT access token
+POST /auth/login  → sets JWT in HTTP-only cookie
 GET  /auth/me     → returns current user info
+POST /auth/logout → clears authentication cookie
 """
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from core.auth import authenticate_user, create_access_token, get_current_user
 from config import get_settings
@@ -18,12 +19,17 @@ from utils.logging import logger
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 settings = get_settings()
 
+# Cookie configuration constants
+COOKIE_NAME = "auth_token"
+COOKIE_SECURE = settings.app_env == "production"  # HTTPS only in production
+COOKIE_SAMESITE = "lax"  # Prevent CSRF while allowing cross-site GET requests
+
 
 @router.post("/login", response_model=Token)
-async def login(request: Request, credentials: LoginRequest):
+async def login(request: Request, response: Response, credentials: LoginRequest):
     """
     Authenticate with username + password.
-    Returns a JWT Bearer token valid for JWT_ACCESS_TOKEN_EXPIRE_MINUTES.
+    Sets JWT in HTTP-only cookie valid for JWT_ACCESS_TOKEN_EXPIRE_MINUTES.
 
     Demo credentials:
       admin   / admin123
@@ -54,6 +60,17 @@ async def login(request: Request, credentials: LoginRequest):
         expires_delta=timedelta(minutes=settings.jwt_access_token_expire_minutes),
     )
 
+    # Set JWT in HTTP-only cookie
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=access_token,
+        max_age=settings.jwt_access_token_expire_minutes * 60,  # seconds
+        expires=settings.jwt_access_token_expire_minutes * 60,   # seconds from now
+        httponly=True,      # Not accessible via JavaScript
+        secure=COOKIE_SECURE,  # HTTPS only in production
+        samesite=COOKIE_SAMESITE,  # CSRF protection
+    )
+
     # Log successful login
     await write_audit_log(AuditLog(
         username=user.username,
@@ -65,10 +82,10 @@ async def login(request: Request, credentials: LoginRequest):
         success=True,
     ))
 
-    logger.info(f"User '{user.username}' logged in successfully")
+    logger.info(f"User '{user.username}' logged in successfully. JWT set as HTTP-only cookie.")
 
     return Token(
-        access_token=access_token,
+        access_token=access_token,  # Still return token for client-side use if needed
         role=user.role,
         username=user.username,
         full_name=user.full_name,
@@ -79,3 +96,16 @@ async def login(request: Request, credentials: LoginRequest):
 async def get_me(current_user: User = Depends(get_current_user)):
     """Return the currently authenticated user's profile."""
     return current_user
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    """Clear the authentication cookie and log out the user."""
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+    )
+    logger.info("User logged out. Auth cookie cleared.")
+    return {"message": "Logged out successfully"}
