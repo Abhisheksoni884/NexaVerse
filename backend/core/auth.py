@@ -10,8 +10,8 @@ Demo credentials (change these in production or replace with Azure Entra ID):
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import Cookie, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 
 from config import get_settings
@@ -20,10 +20,8 @@ from utils.logging import logger
 
 settings = get_settings()
 
-# ── Custom security scheme that supports both cookies and Bearer tokens ─────
-http_bearer = HTTPBearer(auto_error=False)
-
-COOKIE_NAME = "auth_token"
+# ── Password hashing ──────────────────────────────────────────────────────────
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 # ── Demo user store (replace with DB or Azure Entra ID in production) ─────────
@@ -77,27 +75,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-async def get_current_user(
-    auth_credentials: Optional[HTTPAuthCredentials] = Depends(http_bearer),
-    auth_token: Optional[str] = Cookie(None, alias=COOKIE_NAME),
-) -> User:
-    """
-    FastAPI dependency — Extract JWT from either:
-    1. Authorization Bearer header (for API clients)
-    2. HTTP-only cookie (for browser clients)
-    
-    Returns the current user.
-    """
-    # Try cookie first (browser clients), then Authorization header (API clients)
-    token = auth_token or (auth_credentials.credentials if auth_credentials else None)
-    
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    """FastAPI dependency — decode JWT and return the current user."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
