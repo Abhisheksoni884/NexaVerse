@@ -6,31 +6,14 @@ const API_BASE_URL = '/api';
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,  // Automatically include cookies in requests
 });
-
-// Attach JWT token to every request
-api.interceptors.request.use(
-  (config) => {
-    const userStr = localStorage.getItem('user');
-    if (userStr) {
-      try {
-        const user = JSON.parse(userStr);
-        if (user.token) config.headers.Authorization = `Bearer ${user.token}`;
-      } catch (e) {
-        console.error('Failed to parse user from localStorage', e);
-      }
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
 
 // Auto-redirect to login on 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -61,6 +44,11 @@ export const authAPI = {
     const response = await api.post('/auth/login', credentials);
     return response.data;
   },
+  
+  logout: async (): Promise<void> => {
+    await api.post('/auth/logout');
+  },
+  
   getProfile: async (): Promise<UserProfile> => {
     const response = await api.get('/auth/me');
     return response.data;
@@ -151,6 +139,7 @@ export const chatAPI = {
   /**
    * Opens an EventSource for SSE streaming.
    * The backend expects: GET /chat/stream?message=...&session_id=...&token=...
+   * Token is passed in query params since EventSource can't set Authorization headers.
    */
   streamChat: (
     request: ChatRequest,
@@ -161,23 +150,14 @@ export const chatAPI = {
     onReplace?: (content: string) => void,
     onStatus?: (status: string) => void
   ): EventSource => {
-    const userStr = localStorage.getItem('user');
-    let jwtToken = '';
-    if (userStr) {
-      try {
-        jwtToken = JSON.parse(userStr).token || '';
-      } catch (e) {
-        console.error('Failed to parse user token', e);
-      }
-    }
-
     const params = new URLSearchParams();
     params.append('message', request.message);
     params.append('session_id', request.session_id || `session-${Date.now()}`);
     if (request.allowed_categories) {
       request.allowed_categories.forEach(cat => params.append('allowed_categories', cat));
     }
-    if (jwtToken) params.append('token', jwtToken);
+    // Note: HTTP-only cookies are automatically sent by the browser for same-origin requests
+    // No need to pass token in query params anymore
 
     const eventSource = new EventSource(`/api/chat/stream?${params.toString()}`);
 
