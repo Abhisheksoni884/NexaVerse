@@ -17,6 +17,8 @@ services:
       - ./backend/.env
     environment:
       - APP_ENV=production
+    volumes:
+      - ./backend/logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
