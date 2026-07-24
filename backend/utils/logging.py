@@ -108,13 +108,9 @@ _role_lock = threading.Lock()
 def get_user_logger(username: str, session_id: str = "") -> logging.Logger:
     """
     Return (or create) a logger that writes to:
-      logs/<YYYY-MM-DD>/<username>_HHMM.log
+      logs/<YYYY-MM-DD>/<username>.log
     
-    Example: logs/2026-07-23/admin_1530.log (IST time)
-
-    The filename uses the current time (HHMM format in IST) when the logger is created.
-    This happens when the user logs in, so it represents the login time in Indian Standard Time.
-    Format: HHMM (24-hour IST) for Windows filename compatibility (colons not allowed).
+    Example: logs/2026-07-23/admin.log (IST time)
 
     Log rotation: each session file caps at 5 MB (keeps 1 backup).
     A new date folder is created automatically at midnight IST.
@@ -126,14 +122,13 @@ def get_user_logger(username: str, session_id: str = "") -> logging.Logger:
         if logger_key in _role_session_loggers:
             return _role_session_loggers[logger_key]
 
-        # Build logs/2026-07-23/<username>_HHMM.log using IST
+        # Build logs/2026-07-23/<username>.log using IST
         date_str = datetime.now(IST).strftime("%Y-%m-%d")
-        time_str = datetime.now(IST).strftime("%H%M")  # No colon for Windows compatibility
         date_dir = LOGS_ROOT / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
 
-        # Format filename as username_HHMM.log (e.g., admin_1530.log in IST)
-        log_filename = f"{username}_{time_str}.log"
+        # Format filename as username.log (e.g., admin.log in IST)
+        log_filename = f"{username}.log"
         logger_namespace = f"user.{username}.{session_id}" if session_id else f"user.{username}"
 
         log_path = date_dir / log_filename
