@@ -72,6 +72,12 @@ AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
 AZURE_OPENAI_API_KEY=<your-key>
 AZURE_SEARCH_ENDPOINT=https://<resource>.search.windows.net
 AZURE_SEARCH_API_KEY=<your-key>
+
+# OAuth configuration
+GOOGLE_CLIENT_ID=<your-google-client-id>
+GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+GITHUB_CLIENT_ID=<your-github-client-id>
+GITHUB_CLIENT_SECRET=<your-github-client-secret>
 # ... (see .env.example for complete list)
 ```
 
@@ -107,9 +113,11 @@ npm run dev
 
 ---
 
-## Demo Credentials
+## Demo Credentials & OAuth
 
-Login with these demo accounts (development only):
+You can use the built-in OAuth support (**Google & GitHub**) by configuring the respective `CLIENT_ID` and `CLIENT_SECRET` in your `.env` file. OAuth users default to the **Viewer** role.
+
+Alternatively, login with these local demo accounts (development only):
 
 | Username | Password | Role | Access |
 |----------|----------|------|--------|
@@ -117,7 +125,7 @@ Login with these demo accounts (development only):
 | `analyst` | `analyst123` | Analyst | Upload + chat |
 | `viewer` | `viewer123` | Viewer | Read-only |
 
-> **For production:** Replace with Azure Entra ID or your SSO provider
+> **For production:** Use Google/GitHub OAuth, or replace with Azure Entra ID/SSO provider.
 
 ---
 
@@ -205,8 +213,8 @@ python scripts/cleanup_data.py
 # Application logs
 docker-compose logs -f backend
 
-# Role-based logs
-tail -f backend/logs/$(date +%Y-%m-%d)/*.log
+# User session logs (one per username)
+tail -f backend/logs/$(date +%Y-%m-%d)/<username>.log
 ```
 
 ---

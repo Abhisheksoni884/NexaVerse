@@ -16,7 +16,9 @@ from fastapi.responses import RedirectResponse
 from core.auth import authenticate_user, create_access_token, get_current_user
 from core.oauth import (
     GoogleOAuthConfig,
+    GitHubOAuthConfig,
     handle_google_oauth_callback,
+    handle_github_oauth_callback,
     generate_oauth_state,
 )
 from config import get_settings
@@ -196,4 +198,74 @@ async def google_callback(code: str, state: str, request: Request, response: Res
         
     except Exception as e:
         logger.error(f"Google OAuth callback failed: {str(e)}")
+        return RedirectResponse(url="/oauth/callback?error=oauth_failed")
+
+
+# ── GitHub OAuth Endpoints ────────────────────────────────────────────────────
+
+@router.get("/github/login")
+async def github_login(request: Request, response: Response):
+    """
+    Redirect user to GitHub OAuth login page.
+    Stores state in session for CSRF protection.
+    """
+    state = generate_oauth_state()
+    request.session["oauth_state"] = state
+    
+    params = {
+        "client_id": GitHubOAuthConfig.CLIENT_ID,
+        "redirect_uri": GitHubOAuthConfig.REDIRECT_URI,
+        "scope": " ".join(GitHubOAuthConfig.SCOPES),
+        "state": state,
+    }
+    
+    auth_url = f"{GitHubOAuthConfig.AUTHORIZATION_URL}?{urlencode(params)}"
+    logger.info(f"Redirecting to GitHub OAuth: {auth_url[:50]}...")
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/github/callback")
+async def github_callback(code: str, state: str, request: Request, response: Response):
+    """
+    GitHub OAuth callback endpoint.
+    Exchanges code for token and creates/updates user.
+    """
+    try:
+        # Verify state for CSRF protection (in production, verify from session)
+        logger.info(f"GitHub OAuth callback received with code: {code[:20]}...")
+        
+        # Handle OAuth callback
+        user, jwt_token = await handle_github_oauth_callback(code)
+        
+        # Redirect to frontend oauth callback page
+        redirect_response = RedirectResponse(url="/oauth/callback")
+        
+        # Set JWT in HTTP-only cookie on the RedirectResponse
+        redirect_response.set_cookie(
+            key=COOKIE_NAME,
+            value=jwt_token,
+            max_age=settings.jwt_access_token_expire_minutes * 60,
+            expires=settings.jwt_access_token_expire_minutes * 60,
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite=COOKIE_SAMESITE,
+        )
+        
+        # Log successful OAuth login
+        await write_audit_log(AuditLog(
+            username=user.username,
+            role=user.role,
+            action=AuditAction.LOGIN,
+            resource="auth",
+            ip_address=request.client.host if request.client else None,
+            details=f"GitHub OAuth login successful",
+            success=True,
+        ))
+        
+        logger.info(f"GitHub OAuth login successful for {user.username}")
+        
+        return redirect_response
+        
+    except Exception as e:
+        logger.error(f"GitHub OAuth callback failed: {str(e)}")
         return RedirectResponse(url="/oauth/callback?error=oauth_failed")

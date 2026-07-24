@@ -45,10 +45,13 @@ class Settings(BaseSettings):
     azure_content_safety_endpoint: str = Field(..., alias="AZURE_CONTENT_SAFETY_ENDPOINT")
     azure_content_safety_key: str = Field(..., alias="AZURE_CONTENT_SAFETY_KEY")
 
-    # ── OAuth 2.0 (Google) ────────────────────────────────────────────────────
+    # ── OAuth 2.0 (Google & GitHub) ───────────────────────────────────────────
     google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
     google_client_secret: str = Field(default="", alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: str = Field("http://localhost:8000/auth/google/callback", alias="GOOGLE_REDIRECT_URI")
+    github_client_id: str = Field(default="", alias="GITHUB_CLIENT_ID")
+    github_client_secret: str = Field(default="", alias="GITHUB_CLIENT_SECRET")
+    github_redirect_uri: str = Field("http://localhost:8000/auth/github/callback", alias="GITHUB_REDIRECT_URI")
     oauth_token_expiry_minutes: int = Field(480, alias="OAUTH_TOKEN_EXPIRY_MINUTES")
 
     # ── App Settings ───────────────────────────────────────────────────────

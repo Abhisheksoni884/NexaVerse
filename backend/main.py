@@ -113,10 +113,14 @@ if static_dir.exists():
     @app.get("/icons.svg")
     async def icons():
         return FileResponse(static_dir / "icons.svg")
-    # Catch legacy OAuth callbacks (from misconfigured Google Cloud Console)
+    # Catch legacy OAuth callbacks (from misconfigured cloud consoles)
     @app.get("/auth/google/callback")
     async def proxy_google_callback(request: Request):
         return RedirectResponse(url=f"/api/auth/google/callback?{request.query_params}")
+        
+    @app.get("/auth/github/callback")
+    async def proxy_github_callback(request: Request):
+        return RedirectResponse(url=f"/api/auth/github/callback?{request.query_params}")
     
     # Catch-all route for SPA - serve index.html for all non-API routes
     @app.get("/{full_path:path}")
