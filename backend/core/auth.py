@@ -109,11 +109,21 @@ async def get_current_user(
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        oauth_provider: str = payload.get("oauth_provider")
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username, role=role)
     except JWTError:
         raise credentials_exception
+
+    if oauth_provider:
+        return UserInDB(
+            username=token_data.username,
+            full_name=token_data.username,
+            role=token_data.role,
+            hashed_password="oauth",
+            oauth_provider=oauth_provider
+        )
 
     user = DEMO_USERS.get(token_data.username)
     if user is None or user.disabled:
@@ -144,12 +154,23 @@ async def get_current_user_from_query(token: Optional[str] = None) -> User:
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        oauth_provider: str = payload.get("oauth_provider")
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username, role=role)
     except JWTError as e:
         logger.error(f"JWT decode error: {e}")
         raise credentials_exception
+
+    if oauth_provider:
+        logger.info(f"User authenticated successfully via OAuth: {token_data.username}")
+        return UserInDB(
+            username=token_data.username,
+            full_name=token_data.username,
+            role=token_data.role,
+            hashed_password="oauth",
+            oauth_provider=oauth_provider
+        )
 
     user = DEMO_USERS.get(token_data.username)
     if user is None or user.disabled:

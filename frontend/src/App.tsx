@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import { RoleRoute } from './components/RoleRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
+import { OAuthCallback } from './pages/OAuthCallback';
 import { Chat } from './pages/Chat';
 import { DocumentLibrary } from './pages/DocumentLibrary';
 import { MyUsage } from './pages/MyUsage';
@@ -16,6 +17,7 @@ function App() {
         <Layout>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/oauth/callback" element={<OAuthCallback />} />
             
             {/* Common Routes */}
             <Route element={<RoleRoute allowedRoles={['admin', 'analyst', 'viewer']} />}>

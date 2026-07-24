@@ -21,6 +21,9 @@ class User(BaseModel):
 
 class UserInDB(User):
     hashed_password: str
+    oauth_provider: Optional[str] = None  # "google", "microsoft", or None for local auth
+    oauth_id: Optional[str] = None  # Unique ID from OAuth provider
+    oauth_email: Optional[str] = None  # Email from OAuth provider
 
 
 class Token(BaseModel):
@@ -39,3 +42,8 @@ class TokenData(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: Optional[str] = None

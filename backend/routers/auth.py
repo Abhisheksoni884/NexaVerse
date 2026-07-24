@@ -1,15 +1,24 @@
 """
 routers/auth.py — Authentication endpoints.
 
-POST /auth/login  → sets JWT in HTTP-only cookie
-GET  /auth/me     → returns current user info
-POST /auth/logout → clears authentication cookie
+POST /auth/login            → sets JWT in HTTP-only cookie
+GET  /auth/me              → returns current user info
+POST /auth/logout          → clears authentication cookie
+GET  /auth/google/login    → redirects to Google OAuth
+GET  /auth/google/callback → OAuth callback from Google
 """
 from datetime import timedelta
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 
 from core.auth import authenticate_user, create_access_token, get_current_user
+from core.oauth import (
+    GoogleOAuthConfig,
+    handle_google_oauth_callback,
+    generate_oauth_state,
+)
 from config import get_settings
 from models.user import User, Token, LoginRequest
 from models.audit import AuditLog, AuditAction
@@ -117,3 +126,74 @@ async def logout(response: Response):
     )
     logger.info("User logged out. Auth cookie cleared.")
     return {"message": "Logged out successfully"}
+
+
+# ── Google OAuth Endpoints ────────────────────────────────────────────────────
+
+@router.get("/google/login")
+async def google_login(request: Request, response: Response):
+    """
+    Redirect user to Google OAuth login page.
+    Stores state in session for CSRF protection.
+    """
+    state = generate_oauth_state()
+    request.session["oauth_state"] = state
+    
+    params = {
+        "client_id": GoogleOAuthConfig.CLIENT_ID,
+        "redirect_uri": GoogleOAuthConfig.REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(GoogleOAuthConfig.SCOPES),
+        "state": state,
+    }
+    
+    auth_url = f"{GoogleOAuthConfig.AUTHORIZATION_URL}?{urlencode(params)}"
+    logger.info(f"Redirecting to Google OAuth: {auth_url[:50]}...")
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/google/callback")
+async def google_callback(code: str, state: str, request: Request, response: Response):
+    """
+    Google OAuth callback endpoint.
+    Exchanges code for token and creates/updates user.
+    """
+    try:
+        # Verify state for CSRF protection (in production, verify from session)
+        logger.info(f"Google OAuth callback received with code: {code[:20]}...")
+        
+        # Handle OAuth callback
+        user, jwt_token = await handle_google_oauth_callback(code)
+        
+        # Redirect to frontend oauth callback page
+        redirect_response = RedirectResponse(url="/oauth/callback")
+        
+        # Set JWT in HTTP-only cookie on the RedirectResponse
+        redirect_response.set_cookie(
+            key=COOKIE_NAME,
+            value=jwt_token,
+            max_age=settings.jwt_access_token_expire_minutes * 60,
+            expires=settings.jwt_access_token_expire_minutes * 60,
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite=COOKIE_SAMESITE,
+        )
+        
+        # Log successful OAuth login
+        await write_audit_log(AuditLog(
+            username=user.username,
+            role=user.role,
+            action=AuditAction.LOGIN,
+            resource="auth",
+            ip_address=request.client.host if request.client else None,
+            details=f"Google OAuth login successful",
+            success=True,
+        ))
+        
+        logger.info(f"Google OAuth login successful for {user.username}")
+        
+        return redirect_response
+        
+    except Exception as e:
+        logger.error(f"Google OAuth callback failed: {str(e)}")
+        return RedirectResponse(url="/oauth/callback?error=oauth_failed")

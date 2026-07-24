@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from config import get_settings
 from routers import auth, documents, chat, admin, usage
@@ -62,7 +62,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS ───────────────────────────────────────────────────────────────────────
+from starlette.middleware.sessions import SessionMiddleware
+
+# ── Middleware ─────────────────────────────────────────────────────────────────
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.jwt_secret_key,
+    max_age=3600,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -106,6 +113,10 @@ if static_dir.exists():
     @app.get("/icons.svg")
     async def icons():
         return FileResponse(static_dir / "icons.svg")
+    # Catch legacy OAuth callbacks (from misconfigured Google Cloud Console)
+    @app.get("/auth/google/callback")
+    async def proxy_google_callback(request: Request):
+        return RedirectResponse(url=f"/api/auth/google/callback?{request.query_params}")
     
     # Catch-all route for SPA - serve index.html for all non-API routes
     @app.get("/{full_path:path}")

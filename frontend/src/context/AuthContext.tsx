@@ -1,12 +1,14 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { authAPI } from '../utils/api';
+import { oauthService } from '../services/oauthService';
 
 export type Role = 'admin' | 'analyst' | 'viewer';
 
 export interface User {
   username: string;
   role: Role;
+  oauthProvider?: string; // "google", "microsoft", or undefined
 }
 
 interface AuthContextType {
@@ -16,6 +18,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
+  refreshProfile: () => Promise<void>; // Refresh user profile (for OAuth callbacks)
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -28,26 +31,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Check if user is authenticated by fetching current profile
     // The auth_token cookie is automatically sent by the browser
-    authAPI.getProfile()
-      .then(profile => {
+    const checkAuth = async () => {
+      try {
+        const profile = await authAPI.getProfile();
         setUser({
           username: profile.username,
           role: profile.role as Role,
+          oauthProvider: (profile as any).oauth_provider,
         });
-        // Try to get session ID from sessionStorage
+        // Try to get session ID from sessionStorage or generate a new one
         const storedSessionId = sessionStorage.getItem('nexaverse_session_id');
         if (storedSessionId) {
           setSessionId(storedSessionId);
+        } else {
+          const newSessionId = `session_${Date.now()}`;
+          setSessionId(newSessionId);
+          sessionStorage.setItem('nexaverse_session_id', newSessionId);
         }
-      })
-      .catch(() => {
+      } catch (error) {
         // Not authenticated or token expired
         setUser(null);
         setSessionId(null);
-      })
-      .finally(() => {
+      } finally {
         setIsLoading(false);
-      });
+      }
+    };
+
+    checkAuth();
   }, []);
 
   const login = async (username: string, password: string) => {
@@ -79,11 +89,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setSessionId(null);
       sessionStorage.removeItem('nexaverse_session_id');
+      oauthService.clearOAuthState();
+    }
+  };
+
+  const refreshProfile = async () => {
+    /**
+     * Refresh user profile from backend.
+     * Called after OAuth callback to verify authentication.
+     */
+    try {
+      const profile = await authAPI.getProfile();
+      setUser({
+        username: profile.username,
+        role: profile.role as Role,
+        oauthProvider: (profile as any).oauth_provider,
+      });
+      
+      // Generate session ID if not present
+      if (!sessionId) {
+        const newSessionId = `session_${Date.now()}`;
+        setSessionId(newSessionId);
+        sessionStorage.setItem('nexaverse_session_id', newSessionId);
+      }
+    } catch (error) {
+      console.error('Failed to refresh profile:', error);
+      setUser(null);
+      setSessionId(null);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, sessionId, login, logout, isAuthenticated: !!user, isLoading }}>
+    <AuthContext.Provider value={{ user, sessionId, login, logout, isAuthenticated: !!user, isLoading, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

@@ -25,15 +25,15 @@ class Settings(BaseSettings):
     azure_search_api_key: str = Field(..., alias="AZURE_SEARCH_API_KEY")
     azure_search_index_name: str = Field("knowledge-index", alias="AZURE_SEARCH_INDEX_NAME")
 
-    # ── Azure Blob Storage ─────────────────────────────────────────────────────
+    # ── Azure Blob Storage ─────────────────────────────────────────────────
     azure_storage_connection_string: str = Field(..., alias="AZURE_STORAGE_CONNECTION_STRING")
     azure_storage_container_name: str = Field("documents", alias="AZURE_STORAGE_CONTAINER_NAME")
 
-    # ── Azure Document Intelligence ────────────────────────────────────────────
+    # ── Azure Document Intelligence ────────────────────────────────────────
     azure_document_intelligence_endpoint: str = Field(..., alias="AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
     azure_document_intelligence_key: str = Field(..., alias="AZURE_DOCUMENT_INTELLIGENCE_KEY")
 
-    # ── Azure Cosmos DB ────────────────────────────────────────────────────────
+    # ── Azure Cosmos DB ────────────────────────────────────────────────────
     azure_cosmos_url: str = Field(..., alias="AZURE_COSMOS_URL")
     azure_cosmos_key: str = Field(..., alias="AZURE_COSMOS_KEY")
     azure_cosmos_database: str = Field("rag-database", alias="AZURE_COSMOS_DATABASE")
@@ -41,11 +41,17 @@ class Settings(BaseSettings):
     azure_cosmos_tokens_container: str = Field("token-usage", alias="AZURE_COSMOS_TOKENS_CONTAINER")
     azure_cosmos_documents_container: str = Field("documents-meta", alias="AZURE_COSMOS_DOCUMENTS_CONTAINER")
 
-    # ── Azure Content Safety ───────────────────────────────────────────────────
+    # ── Azure Content Safety ───────────────────────────────────────────────
     azure_content_safety_endpoint: str = Field(..., alias="AZURE_CONTENT_SAFETY_ENDPOINT")
     azure_content_safety_key: str = Field(..., alias="AZURE_CONTENT_SAFETY_KEY")
 
-    # ── App Settings ───────────────────────────────────────────────────────────
+    # ── OAuth 2.0 (Google) ────────────────────────────────────────────────────
+    google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str = Field(default="", alias="GOOGLE_CLIENT_SECRET")
+    google_redirect_uri: str = Field("http://localhost:8000/auth/google/callback", alias="GOOGLE_REDIRECT_URI")
+    oauth_token_expiry_minutes: int = Field(480, alias="OAUTH_TOKEN_EXPIRY_MINUTES")
+
+    # ── App Settings ───────────────────────────────────────────────────────
     app_env: str = Field("development", alias="APP_ENV")
     cors_origins: str = Field("http://localhost:3000,http://localhost:5173", alias="CORS_ORIGINS")
     max_file_size_mb: int = Field(50, alias="MAX_FILE_SIZE_MB")
