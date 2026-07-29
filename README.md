@@ -85,8 +85,19 @@ GITHUB_CLIENT_SECRET=<your-github-client-secret>
 
 **Option A: Docker (Recommended)**
 ```bash
-docker-compose up --build
+# On Windows, use environment variable to disable BuildKit (if using Windows 11 with WSL2)
+$env:DOCKER_BUILDKIT=0; docker compose up --build
+
+# Or on Linux/Mac:
+docker compose up --build
 ```
+
+The application will:
+- Build the backend Docker image (Python 3.11 + FastAPI)
+- Start the service on http://localhost:8000
+- Verify Azure AI Search index
+- Initialize Cosmos DB containers
+- Serve the frontend from `/app/static`
 
 **Option B: Local Development**
 
@@ -219,7 +230,20 @@ tail -f backend/logs/$(date +%Y-%m-%d)/<username>.log
 
 ---
 
-## Performance Characteristics
+## Current Setup Status ✅
+
+- ✅ Backend: FastAPI with uvicorn server (Python 3.11)
+- ✅ Frontend: React 19 static assets built into `/backend/static`
+- ✅ Docker: Multi-stage Dockerfile with proper .dockerignore
+- ✅ Environment: All Azure services configured and tested
+- ✅ OAuth: Google & GitHub OAuth 2.0 implemented
+- ✅ Database: Cosmos DB containers initialized
+- ✅ Search: Azure AI Search index operational
+- ✅ Health Check: Configured and passing
+
+**Note:** Frontend must be built before Docker build. Run `cd frontend && npm run build` in the frontend directory to update static assets.
+
+---
 
 | Operation | Time | Notes |
 |-----------|------|-------|
