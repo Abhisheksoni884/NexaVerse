@@ -17,8 +17,10 @@ from core.auth import authenticate_user, create_access_token, get_current_user
 from core.oauth import (
     GoogleOAuthConfig,
     GitHubOAuthConfig,
+    MicrosoftOAuthConfig,
     handle_google_oauth_callback,
     handle_github_oauth_callback,
+    handle_microsoft_oauth_callback,
     generate_oauth_state,
 )
 from config import get_settings
@@ -268,4 +270,75 @@ async def github_callback(code: str, state: str, request: Request, response: Res
         
     except Exception as e:
         logger.error(f"GitHub OAuth callback failed: {str(e)}")
+        return RedirectResponse(url="/oauth/callback?error=oauth_failed")
+
+
+# ── Microsoft Azure OAuth Endpoints ──────────────────────────────────────────
+
+@router.get("/microsoft/login")
+async def microsoft_login(request: Request, response: Response):
+    """
+    Redirect user to Microsoft Azure OAuth login page.
+    Stores state in session for CSRF protection.
+    """
+    state = generate_oauth_state()
+    request.session["oauth_state"] = state
+    
+    params = {
+        "client_id": MicrosoftOAuthConfig.CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": MicrosoftOAuthConfig.REDIRECT_URI,
+        "response_mode": "query",
+        "scope": " ".join(MicrosoftOAuthConfig.SCOPES),
+        "state": state,
+    }
+    
+    auth_url = f"{MicrosoftOAuthConfig.AUTHORIZATION_URL}?{urlencode(params)}"
+    logger.info(f"Redirecting to Microsoft OAuth: {auth_url[:50]}...")
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/microsoft/callback")
+async def microsoft_callback(code: str, state: str, request: Request, response: Response):
+    """
+    Microsoft OAuth callback endpoint.
+    Exchanges code for token and creates/updates user.
+    """
+    try:
+        logger.info(f"Microsoft OAuth callback received with code: {code[:20]}...")
+        
+        # Handle OAuth callback
+        user, jwt_token = await handle_microsoft_oauth_callback(code)
+        
+        # Redirect to frontend oauth callback page
+        redirect_response = RedirectResponse(url="/oauth/callback")
+        
+        # Set JWT in HTTP-only cookie on the RedirectResponse
+        redirect_response.set_cookie(
+            key=COOKIE_NAME,
+            value=jwt_token,
+            max_age=settings.jwt_access_token_expire_minutes * 60,
+            expires=settings.jwt_access_token_expire_minutes * 60,
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite=COOKIE_SAMESITE,
+        )
+        
+        # Log successful OAuth login
+        await write_audit_log(AuditLog(
+            username=user.username,
+            role=user.role,
+            action=AuditAction.LOGIN,
+            resource="auth",
+            ip_address=request.client.host if request.client else None,
+            details=f"Microsoft OAuth login successful",
+            success=True,
+        ))
+        
+        logger.info(f"Microsoft OAuth login successful for {user.username}")
+        
+        return redirect_response
+        
+    except Exception as e:
+        logger.error(f"Microsoft OAuth callback failed: {str(e)}")
         return RedirectResponse(url="/oauth/callback?error=oauth_failed")

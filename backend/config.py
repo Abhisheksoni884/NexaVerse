@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     github_client_id: str = Field(default="", alias="GITHUB_CLIENT_ID")
     github_client_secret: str = Field(default="", alias="GITHUB_CLIENT_SECRET")
     github_redirect_uri: str = Field("http://localhost:8000/auth/github/callback", alias="GITHUB_REDIRECT_URI")
+    azure_client_id: str = Field(default="", alias="AZURE_CLIENT_ID")
+    azure_client_secret: str = Field(default="", alias="AZURE_CLIENT_SECRET")
+    azure_tenant_id: str = Field(default="common", alias="AZURE_TENANT_ID")
+    azure_redirect_uri: str = Field("http://localhost:8000/auth/microsoft/callback", alias="AZURE_REDIRECT_URI")
     oauth_token_expiry_minutes: int = Field(480, alias="OAUTH_TOKEN_EXPIRY_MINUTES")
 
     # ── App Settings ───────────────────────────────────────────────────────

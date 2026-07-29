@@ -38,6 +38,18 @@ class GitHubOAuthConfig:
     SCOPES = ["read:user", "user:email"]
 
 
+class MicrosoftOAuthConfig:
+    """Microsoft Azure OAuth 2.0 configuration"""
+    CLIENT_ID = settings.azure_client_id
+    CLIENT_SECRET = settings.azure_client_secret
+    TENANT_ID = settings.azure_tenant_id
+    REDIRECT_URI = settings.azure_redirect_uri
+    AUTHORIZATION_URL = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/authorize"
+    TOKEN_URL = f"https://login.microsoftonline.com/{settings.azure_tenant_id}/oauth2/v2.0/token"
+    USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
+    SCOPES = ["openid", "email", "profile", "User.Read"]
+
+
 # ── OAuth User Info Models ───────────────────────────────────────────────────
 
 class GoogleUserInfo:
@@ -82,6 +94,32 @@ class GitHubUserInfo:
             role=UserRole.viewer,  # Default role
             hashed_password="oauth-github",  # Placeholder for OAuth users
             oauth_provider="github",
+            oauth_id=self.sub,
+            oauth_email=self.email,
+        )
+
+
+class MicrosoftUserInfo:
+    """Parsed Microsoft Azure OAuth user info"""
+    def __init__(self, data: dict):
+        self.sub = data.get("sub")
+        self.email = data.get("email") or data.get("upn")
+        self.name = data.get("name")
+        self.picture = data.get("picture")
+
+    def to_user(self) -> UserInDB:
+        """Convert to NexaVerse User"""
+        if self.email:
+            username = self.email.split("@")[0]
+        else:
+            username = f"ms_{self.sub[:8]}"
+            
+        return UserInDB(
+            username=username,
+            full_name=self.name or username,
+            role=UserRole.viewer,  # Default role
+            hashed_password="oauth-microsoft",  # Placeholder for OAuth users
+            oauth_provider="microsoft",
             oauth_id=self.sub,
             oauth_email=self.email,
         )
@@ -135,6 +173,31 @@ async def exchange_github_code_for_token(code: str) -> dict:
             return response.json()
         except Exception as e:
             logger.error(f"GitHub token exchange failed: {str(e)}")
+            raise
+
+
+async def exchange_microsoft_code_for_token(code: str) -> dict:
+    """
+    Exchange Microsoft Azure authorization code for access token.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                MicrosoftOAuthConfig.TOKEN_URL,
+                data={
+                    "client_id": MicrosoftOAuthConfig.CLIENT_ID,
+                    "client_secret": MicrosoftOAuthConfig.CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": MicrosoftOAuthConfig.REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                    "scope": " ".join(MicrosoftOAuthConfig.SCOPES),
+                },
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Microsoft token exchange failed: {str(e)}")
             raise
 
 
@@ -202,6 +265,24 @@ async def get_github_user_info(access_token: str) -> GitHubUserInfo:
             
         except Exception as e:
             logger.error(f"Failed to fetch GitHub user info: {str(e)}")
+            raise
+
+
+async def get_microsoft_user_info(access_token: str) -> MicrosoftUserInfo:
+    """
+    Fetch user info from Microsoft Graph using access token.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                MicrosoftOAuthConfig.USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return MicrosoftUserInfo(response.json())
+        except Exception as e:
+            logger.error(f"Failed to fetch Microsoft user info: {str(e)}")
             raise
 
 
@@ -276,6 +357,42 @@ async def handle_github_oauth_callback(code: str) -> tuple[User, str]:
         
     except Exception as e:
         logger.error(f"GitHub OAuth callback failed: {str(e)}")
+        raise
+
+
+async def handle_microsoft_oauth_callback(code: str) -> tuple[User, str]:
+    """
+    Handle Microsoft OAuth callback.
+    Returns (User, JWT token) if successful.
+    """
+    try:
+        # Exchange code for token
+        token_response = await exchange_microsoft_code_for_token(code)
+        access_token = token_response.get("access_token")
+        
+        if not access_token:
+            raise ValueError("No access token in response")
+        
+        # Get user info
+        microsoft_user = await get_microsoft_user_info(access_token)
+        
+        # Create/update user in system
+        user = microsoft_user.to_user()
+        
+        # Create JWT token for this user
+        jwt_token = create_oauth_access_token(
+            data={
+                "sub": user.username,
+                "role": user.role,
+                "oauth_provider": "microsoft",
+            }
+        )
+        
+        logger.info(f"Microsoft OAuth login successful for {user.oauth_email}")
+        return user, jwt_token
+        
+    except Exception as e:
+        logger.error(f"Microsoft OAuth callback failed: {str(e)}")
         raise
 
 
